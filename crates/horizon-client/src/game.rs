@@ -5550,6 +5550,8 @@ impl Game<'_> {
             // long before this point; the lazy scoreboard/storage read has to
             // be done by then too, or a load tag writes over what it restores.
             self.load_scoreboard();
+            // The functions' commands reach every player and chunk of every level: the regions are home first.
+            span("regions_land_functions", || self.land_residents_for_functions());
             span("tick_functions", || self.tick_functions());
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {

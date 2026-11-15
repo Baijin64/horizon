@@ -1757,6 +1757,16 @@ impl Game<'_> {
         keys: &HashSet<(i32, i32)>,
         remove: bool,
     ) -> Vec<((i32, i32), Vec<Tag>)> {
+        // A chunk lent to a resident region has its entities there: written from here it would be saved
+        // without them (and an empty list replaces the file's).
+        let kept: HashSet<(i32, i32)>;
+        let keys = match self.streaming.lent.as_deref() {
+            Some(lent) if keys.iter().any(|k| lent.contains(k)) => {
+                kept = keys.iter().filter(|k| !lent.contains(k)).copied().collect();
+                &kept
+            }
+            _ => keys,
+        };
         let mut out: HashMap<(i32, i32), Vec<Tag>> =
             keys.iter().map(|k| (*k, Vec::new())).collect();
         // Every kind in `entity_lists!` saves itself (`Entity::save_nbt`).
@@ -2048,6 +2058,14 @@ impl Game<'_> {
         self.spawn_loaded_entities();
         let keys: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
         let chunks = self.entity_chunks(&keys, false);
+        if let Some(before) = self.regions.entities_before_save.take() {
+            let written: usize = chunks.iter().map(|(_, e)| e.len()).sum();
+            if before > 0 && written == 0 {
+                log::warn!(
+                    "regions: save lost entities: {before} in memory before landing the regions, {written} written"
+                );
+            }
+        }
         self.prune_entity_memory();
         if wait {
             self.save.save_entities(chunks)
@@ -2056,7 +2074,7 @@ impl Game<'_> {
         }
     }
     /// The ids of every entity in the level now.
-    fn live_entity_ids(&self) -> HashSet<u32> {
+    pub(super) fn live_entity_ids(&self) -> HashSet<u32> {
         use super::entity::{Entity as _, entity_lists_of, for_each_entity};
         let mut alive: HashSet<u32> = self.entity_ids_off_walk().collect();
         // The natural fence knots a lead still holds (game/leads.rs).

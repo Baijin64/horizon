@@ -596,7 +596,7 @@ pub fn game_dispatcher_with_features(features: &[String]) -> &'static Dispatcher
         || {
             let mut d = build_for_features(dev, dedicated, true);
             if horizon {
-                horizon_commands(&mut d, 0);
+                horizon_commands(&mut d, 0, dedicated);
             }
             d
         },
@@ -634,15 +634,18 @@ pub(crate) fn game_tree(dev: bool, horizon: bool, dedicated: bool) -> &'static D
             .get_or_init(|| {
                 let mut d = build_for(dev, dedicated);
                 if horizon {
-                    horizon_commands(&mut d, 0);
+                    horizon_commands(&mut d, 0, dedicated);
                 }
                 d
             }),
     }
 }
 /// Commands vanilla doesn't have, after its own: `/pregen`
-/// (docs/pregeneration.md).
-fn horizon_commands(d: &mut Dispatcher, root: usize) {
+/// (docs/pregeneration.md), and on a dedicated server `/tps` and `/mspt`.
+fn horizon_commands(d: &mut Dispatcher, root: usize, dedicated: bool) {
+    if dedicated {
+        super::tree_extra::register_horizon_dedicated(d, root);
+    }
     let pregen = d.literal(root, "pregen");
     d.requires(pregen, GAMEMASTERS);
     let start = d.literal(pregen, "start");

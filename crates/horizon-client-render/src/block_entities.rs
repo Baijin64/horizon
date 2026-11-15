@@ -98,6 +98,11 @@ pub struct BlockEntities {
     asleep: FxHashSet<Pos>,
     /// A region's lent set records the slots it makes (true) and frees (false), for [`BlockEntities::take_back`].
     journal: Option<Vec<(Pos, bool)>>,
+    /// The level's set: positions whose block entity a region holds (lent out). Its slots stay in the ticking
+    /// list, and a sweep must not take them for slots of removed block entities.
+    lent: FxHashSet<Pos>,
+    /// A region's set: the positions lent to it, for [`BlockEntities::take_back`] to release.
+    borrowed: Vec<Pos>,
 }
 
 /// A structure or test instance block: the block entities whose box the frame may draw.
@@ -317,6 +322,8 @@ impl BlockEntities {
         }
         for (pos, entity) in self.map.extract_if(|pos, _| region_of(*pos).is_some()) {
             let r = region_of(pos).expect("extracted for its region");
+            out[r].borrowed.push(pos);
+            self.lent.insert(pos);
             if let Some(&slot) = self.live.get(&pos) {
                 out[r].live.insert(pos, slot);
             }
@@ -391,8 +398,12 @@ impl BlockEntities {
             sign_editors,
             mods,
             journal,
+            borrowed,
             ..
         } = region;
+        for pos in &borrowed {
+            self.lent.remove(pos);
+        }
         self.map.reserve(map.len());
         self.map.extend(map);
         self.attachments.extend(attachments);
@@ -673,6 +684,7 @@ impl BlockEntities {
         self.added.clear();
         self.pending.clear();
         self.out.clear();
+        self.lent.clear();
         self.replaced.clear();
         self.freed = false;
     }
@@ -755,9 +767,13 @@ impl BlockEntities {
             return Arc::clone(&self.tickers);
         }
         self.out.clear();
-        let (live, map) = (&mut self.live, &self.map);
+        let (live, map, lent) = (&mut self.live, &self.map, &self.lent);
         Arc::make_mut(&mut self.tickers).retain(|(p, slot)| {
             let mine = live.get(p) == Some(slot);
+            // A lent block entity is in a region's map, not this one: its slot stays.
+            if mine && lent.contains(p) {
+                return true;
+            }
             if mine && !map.contains_key(p) {
                 live.remove(p);
             }
@@ -825,6 +841,27 @@ mod tests {
         got.sort();
         assert_eq!(got, vec![(17, 64, 1), (18, 64, 2)]);
         assert_eq!(b.len(), 2);
+    }
+
+    /// A sweep of the level's ticking list, set off by another removal while a region holds block entities, keeps
+    /// the lent ones' slots.
+    #[test]
+    fn a_sweep_keeps_the_slots_of_lent_block_entities() {
+        let mut b = level();
+        let (lent, other) = ((1, 64, 1), (-17, 64, 1));
+        let states: HashMap<Pos, u32> = [(lent, 1), (other, 1)].into_iter().collect();
+        b.insert(lent, hopper());
+        b.insert(other, hopper());
+        assert_eq!(order(&mut b, &states).len(), 2);
+        // Only chunk 0 is lent; another block entity is removed and the list swept.
+        let mut parts = b.lend(1, |p| (p.0 >> 4 == 0).then_some(0));
+        b.remove(&other);
+        let swept = b.tickers(|p| states.get(&p).copied().unwrap_or(0));
+        assert_eq!(swept.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [lent]);
+        b.take_back(parts.remove(0));
+        assert_eq!(order(&mut b, &states), [lent]);
+        let slot = b.tickers(|p| states.get(&p).copied().unwrap_or(0))[0];
+        assert!(b.is_live(slot));
     }
 
     /// Unloading a chunk removes its block entities and leaves the others'

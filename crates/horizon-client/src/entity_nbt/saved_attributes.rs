@@ -35,8 +35,10 @@ pub(super) fn read_attribute_modifiers(m: &mut Mob, tag: &Tag) {
         let Some(Tag::List(modifiers)) = a.get("modifiers") else {
             continue;
         };
-        // Armor lives in the sulfur cube's own map, not this store.
-        if attr == Attr::Armor {
+        // Armor lives in the sulfur cube's own map, not this store; a shulker's
+        // `minecraft:covered` shell (`setRawPeekAmount(0)`) is the one armor modifier this
+        // store holds, and what `mobs::armor::values` counts.
+        if attr == Attr::Armor && m.species() != crate::mobs::Species::Shulker {
             continue;
         }
         for x in modifiers {
@@ -126,6 +128,28 @@ mod saved_attribute_modifier_tests {
         };
         assert_eq!(modifiers.len(), 1);
         assert_eq!(float(modifiers[0].get("amount")), Some(2.0));
+    }
+    /// `Shulker.setRawPeekAmount(0)`'s covered shell is a saved permanent modifier: a
+    /// shulker that closed its lid before the save is armored when it loads.
+    #[test]
+    fn a_saved_covered_shell_armors_the_loaded_shulker() {
+        let mut shulker = (*kind()).clone();
+        shulker.id = "minecraft:shulker".into();
+        shulker.species = Species::Shulker;
+        let types = HashMap::from([("minecraft:shulker".to_owned(), Arc::new(shulker))]);
+        let load = |attributes: &str| {
+            let snbt = format!(
+                r#"{{id:"minecraft:shulker",Pos:[0.5d,64d,0.5d],Peek:0b,attributes:{attributes}}}"#
+            );
+            let tag = horizon_world::nbt::parse_snbt(&snbt).unwrap().0;
+            mob_from_nbt(&tag, &types, 1, None).unwrap()
+        };
+        let closed = load(
+            r#"[{id:"minecraft:armor",base:0d,modifiers:[
+                {id:"minecraft:covered",amount:20d,operation:"add_value"}]}]"#,
+        );
+        assert_eq!(crate::mobs::armor::values(&closed).0, 20.0);
+        assert_eq!(crate::mobs::armor::values(&load("[]")).0, 0.0);
     }
     #[test]
     fn a_saved_health_above_the_max_health_is_clamped_to_it() {

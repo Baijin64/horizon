@@ -1127,6 +1127,11 @@ impl Game<'_> {
     pub(super) fn run_level_teleports(&mut self, host: &mut LanHost) {
         for mut t in std::mem::take(&mut self.level_teleports) {
             let Some(i) = host.hub.guests.iter().position(|g| g.conn == t.conn) else {
+                log::warn!(
+                    "dropped a teleport to {} for connection {}: the player is not on the server's own hub (gone, or lent to a region)",
+                    t.dim.id(),
+                    t.conn
+                );
                 continue;
             };
             // PlayerTeleportEvent: the mods may stop it or move its point in that level.

@@ -464,8 +464,9 @@ pub struct Hub {
     /// The players whose region keeps them on its thread between ticks: their packets and leaves wait in
     /// `away_events` for it (a resident region, `regions.rs`).
     pub away: std::collections::HashSet<u32>,
-    /// Where those players stand: the chunks the server keeps loaded for them.
-    pub away_places: Vec<(i32, i32)>,
+    /// Where those players stand, by level: the chunks the server keeps loaded for them in that level (and
+    /// only there: a level's players away in a region say nothing of another level's streaming).
+    pub away_places: std::collections::HashMap<String, Vec<(i32, i32)>>,
     /// The sleep counts (players not in spectator mode, in bed, asleep 100 ticks) the resident regions reported
     /// last, summed: the server's night skip counts them with its own players. In a region's hub: its own report.
     pub away_sleep: (i64, i64, i64),
@@ -904,7 +905,7 @@ impl Hub {
             item_ids: Default::default(),
             entity_types: Default::default(),
             away: Default::default(),
-            away_places: Vec::new(),
+            away_places: std::collections::HashMap::new(),
             away_sleep: (0, 0, 0),
             wake_request: false,
             away_events: Vec::new(),
@@ -1194,7 +1195,13 @@ impl Hub {
             .iter()
             .filter(|g| self.watches(g) && loads(g) && !g.fake)
             .map(Guest::chunk)
-            .chain(self.away_places.iter().copied())
+            .chain(
+                self.away_places
+                    .get(&self.config.dimension)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            )
             .collect()
     }
     /// The areas fake players keep loaded: the chunk under each and its radius, their own view

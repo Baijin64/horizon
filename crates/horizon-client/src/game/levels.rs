@@ -915,6 +915,8 @@ impl Game<'_> {
                         .is_some_and(|p| held(&p.streaming))
                 };
                 guests.iter().any(|g| g.dimension == d.id())
+                    // Players lent to resident regions are not in the hub's list: their level still runs.
+                    || self.level_has_residents(*d)
                     // A viewer count not yet told to 0 (`tick_mod_container_viewers`).
                     || self.mod_container_viewers.keys().any(|(k, _)| *k == d.id())
                     || self.player_bed_levels().any(|b| b == *d)

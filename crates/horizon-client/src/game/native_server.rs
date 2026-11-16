@@ -960,6 +960,7 @@ impl Game<'_> {
         if self.lan_acting.is_some() || self.lan.is_none() {
             return false;
         }
+        self.land_residents_for_native_command();
         self.run_as_server_source(line, true)
     }
     /// `native_run_command`'s run, `silent` as the source's output is
@@ -995,6 +996,7 @@ impl Game<'_> {
         if self.lan_acting.is_some() || self.lan.is_none() {
             return out;
         }
+        self.land_residents_for_native_command();
         let line = line.strip_prefix('/').unwrap_or(line);
         let outer_lines = self.chat_capture.replace(Vec::new());
         let outer_results = self.cmds.results.replace(Vec::new());
@@ -1069,6 +1071,9 @@ impl Game<'_> {
     pub(super) fn native_run_command_as(&mut self, uuid: u128, line: &str) -> NativeCommandResult {
         let mut out = NativeCommandResult::default();
         let line = line.strip_prefix('/').unwrap_or(line).to_owned();
+        if self.lan_acting.is_none() {
+            self.land_residents_for_native_command();
+        }
         let outer_results = self.cmds.results.replace(Vec::new());
         if self.lan_acting.is_some() {
             if let (Some(conn), Some(permission), true) = (

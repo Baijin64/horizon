@@ -269,6 +269,20 @@ impl Game<'_> {
                     from,
                     attacker_species,
                 };
+                // `Shulker.hurtServer`: damage tagged `is_projectile` whose direct entity is a shulker
+                // bullet is a hit by one, whatever sent it.
+                let bullet = matches!(by, Some(Target::Projectile(p)) if self
+                    .creatures
+                    .projectiles
+                    .iter()
+                    .any(|q| q.id == p
+                        && matches!(q.kind, horizon_client::projectiles::ProjectileKind::ShulkerBullet { .. })))
+                    && self.motion.health.damage.id(ty).is_some_and(|kind| {
+                        self.motion
+                            .health
+                            .damage
+                            .in_tag(kind, "minecraft:is_projectile")
+                    });
                 // DamageSource.getEntity is the causing player, even when
                 // another client issued the command or supplied the direct entity.
                 let guest = match cause.or(by) {
@@ -279,7 +293,7 @@ impl Game<'_> {
                     if let Some(mut host) = self.lan.take() {
                         let hurt = self
                             .as_guest(&mut host, conn, |g| {
-                                g.command_damage_mob(id, amount, damage)
+                                g.command_damage_mob(id, amount, damage, bullet)
                             })
                             .unwrap_or(false);
                         if hurt {
@@ -291,7 +305,7 @@ impl Game<'_> {
                         false
                     }
                 } else {
-                    self.command_damage_mob(id, amount, damage)
+                    self.command_damage_mob(id, amount, damage, bullet)
                 }
             }
             Target::Item(id) => self.command_damage_item(id, amount, ty, cause.or(by)),
@@ -468,7 +482,16 @@ impl Game<'_> {
     /// `DamageCommand.damage`: retain the accepted hit's player context and run
     /// `Zombie.hurtServer`'s reinforcement requests before the command returns.
     /// Health-changing hits also raise their damage vibration before return.
-    fn command_damage_mob(&mut self, id: u32, amount: f32, damage: Damage) -> bool {
+    ///
+    /// `by_shulker_bullet`: the damage came from a shulker bullet, so a shulker that took it
+    /// teleports and may leave a copy (`Shulker.hurtServer`'s `hitByShulkerBullet`).
+    fn command_damage_mob(
+        &mut self,
+        id: u32,
+        amount: f32,
+        damage: Damage,
+        by_shulker_bullet: bool,
+    ) -> bool {
         let player_uuid = (damage.attacker == Some(Who::Player))
             .then(|| self.owner_damage_uuid())
             .flatten();
@@ -482,6 +505,9 @@ impl Game<'_> {
                 None => m.damage(amount, damage),
             };
             health_changed = hurt && m.health != old_health;
+            if hurt && by_shulker_bullet {
+                horizon_client::mobs::shulker::hit_by_bullet(m);
+            }
             if hurt {
                 reinforcements = take_new_reinforcements(&mut m.outbox, queued);
             }
@@ -2384,7 +2410,7 @@ mod allay_owner_damage_tests {
                 let accepted = if melee {
                     game.hurt_by_player(0, 2.0, source)
                 } else {
-                    game.command_damage_mob(1, 2.0, source)
+                    game.command_damage_mob(1, 2.0, source, false)
                 };
                 let expected = liked != Some(actual);
                 assert_eq!(accepted, expected, "melee={melee}, liked={liked:?}");

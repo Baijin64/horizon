@@ -1,6 +1,6 @@
 //! Effective mob armor and toughness at the damage boundary.
+use super::Mob;
 use super::finalize::{self, Attr};
-use super::{Mob, Species};
 use horizon_world::attributes::{Definition, Instance, Observer, entity::EntityAttributes};
 use std::convert::Infallible;
 
@@ -43,11 +43,16 @@ fn effective(
 /// its integer result to float. Toughness converts its effective double directly.
 pub fn values(mob: &Mob) -> (f32, f32) {
     let (worn, worn_toughness) = mob.worn_armor();
-    let covered = if mob.species() == Species::Shulker && mob.extra.counter == 0 {
-        20.0
-    } else {
-        0.0
-    };
+    // `Shulker.setRawPeekAmount(0)` adds the `minecraft:covered` modifier (+20) and any other
+    // amount removes it; a shulker that never closed its lid, a freshly summoned one with a
+    // `Peek` of 0 included, has none.
+    let covered: f64 = mob.extra.attributes.as_deref().map_or(0.0, |a| {
+        a.modifiers
+            .iter()
+            .filter(|m| m.attr == Attr::Armor && m.id == "minecraft:covered")
+            .map(|m| m.amount)
+            .sum()
+    });
     let map = mob.extra.armor_attributes.as_deref();
     let armor_base =
         finalize::base_value_with(mob, Attr::Armor, || Some(f64::from(mob.kind.armor)));
@@ -111,7 +116,7 @@ pub fn max_absorption(mob: &Mob) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mobs::{Damage, DamageKind};
+    use crate::mobs::{Damage, DamageKind, Species};
     use horizon_core::geometry::Vec3;
     use horizon_world::attributes::entity::Catalog;
     use std::sync::Arc;
@@ -173,9 +178,18 @@ mod tests {
         map.edit(key, |value, observer| {
             value.set_base_value(5.0, observer).unwrap()
         });
+        // A shulker that never closed its lid has no covered shell: the lid alone adds nothing.
         mob.extra.counter = 0;
+        assert_eq!(values(&mob), (5.0, 8.0));
+        finalize::add_modifier(
+            &mut mob,
+            Attr::Armor,
+            "minecraft:covered",
+            20.0,
+            finalize::Op::AddValue,
+        );
         assert_eq!(values(&mob), (25.0, 8.0));
-        mob.extra.counter = 1;
+        finalize::remove_modifier(&mut mob, Attr::Armor, "minecraft:covered");
         assert_eq!(values(&mob), (5.0, 8.0));
         let mob = pig(100.0, 100.0);
         assert_eq!(values(&mob), (30.0, 20.0));

@@ -2594,6 +2594,9 @@ impl Hub {
                 }
                 NetEvent::Packet(conn, packet, bytes) => {
                     let Some(g) = self.guest_mut(conn) else {
+                        if matches!(&*packet, S::Chat(_) | S::ChatCommand(_) | S::ChatCommandSigned(_)) {
+                            log::warn!("dropped a chat or command packet of connection {conn}: no such player on this hub");
+                        }
                         continue;
                     };
                     // Out of the channel: the network thread may hand this player more.
@@ -3108,6 +3111,10 @@ impl Hub {
             .partition(|e| matches!(e, NetEvent::Packet(c, ..) | NetEvent::Left(c, _) if conns.contains(c)));
         self.away_events = kept;
         self.replay.extend(mine);
+        // A duplicate login belongs to no connection: it waits for the last region to be home.
+        if self.away.is_empty() {
+            self.replay.append(&mut self.away_events);
+        }
     }
 
     /// The players are back: what waited for them is for the next poll.

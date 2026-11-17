@@ -214,7 +214,9 @@ impl Game<'_> {
         {
             return Some(g.bounds());
         }
-        if let Some(m) = self.mobs.iter().find(|m| m.id as i32 == id) {
+        // A mob discarded earlier this tick waits in the list for the creature pass, but
+        // `ServerLevel.getEntityOrPart` no longer finds it.
+        if let Some(m) = self.mobs.iter().find(|m| m.id as i32 == id && !m.removed) {
             return Some(m.bounds());
         }
         if let Some((lo, hi, _)) = self.object_target(id) {

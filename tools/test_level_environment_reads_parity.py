@@ -82,18 +82,18 @@ def main():
                            cwd=scratch, env=env, stdout=output, stderr=subprocess.STDOUT,
                            check=True, timeout=900)
         text = (build / 'rust.log').read_text()
-        assert re.search(r'^test result: ok\. 5 passed;', text, re.MULTILINE), text
+        assert re.search(r'^test result: ok\. 6 passed; 0 failed; 0 ignored;', text, re.MULTILINE), text
     base.ensure_sources_unchanged(source_paths, hashes)
     assert lab.digest(inputs, 'sha256') == input_hash, 'Inputs changed during validation'
     lab.write_json(report, dict(schema=1, minecraft=lock['minecraft']['version'],
         sources_sha256=hashes, input_sha256=input_hash, cases=len(rows),
-        fixed_cases=len(fixed), resource_tests=5,
+        fixed_cases=len(fixed), resource_tests=6,
         jars_sha256={side: lab.digest(jars[side], 'sha256') for side in ('server', 'client')},
         expected_sha256=lab.digest(build / 'server-expected.jsonl', 'sha256'),
         rust_test_executable_sha256=lab.digest(Path(executable), 'sha256'),
         scope='Six LevelRef reads through a resource-backed Game against real client/server '
               'biome zoom, closest-biome search, collision floors, dimension metadata and Level '
-              'sky update/get calls. Four further Game regressions cover edited cells, parked '
+              'sky update/get calls. Five further Game regressions cover edited cells, parked '
               'levels, client login, stale handles and no resident chunk loading. '
               'Does not run a server tick loop, draw a GUI, or exercise guest transport.'))
     print(f'{len(rows)} level environment cases match both vanilla jars: {report}', flush=True)

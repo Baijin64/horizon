@@ -269,6 +269,8 @@ pub struct ShadowDraws<'a> {
     pub timing: Option<&'a mut PassTiming>,
     /// What the light sees, when the frame asked for a shadow view.
     pub lists: Option<ShadowLists<'a>>,
+    /// This frame, for the shadow cache's key (`native_shadow::cache_key`).
+    pub frame: &'a Frame<'a>,
 }
 
 /// The renderer's lists of what the light sees, and what they draw from.

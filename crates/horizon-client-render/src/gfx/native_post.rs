@@ -357,7 +357,7 @@ pub struct NativeFrame {
     reflection_sampler: wgpu::Sampler,
     /// The shadow map the stages read, and the camera that draws it when the pack asks for one.
     pub shadow_map: super::native_shadow::ShadowMap,
-    shadow_camera: Option<horizon_shaders::Shadow>,
+    pub(super) shadow_camera: Option<horizon_shaders::Shadow>,
     /// Whether the pack's material reads `reflection` (`NativePack::new`): else no mirror
     /// is drawn and `has_reflection` stays 0.
     pub reflects: bool,

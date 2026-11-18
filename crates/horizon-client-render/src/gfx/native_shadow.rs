@@ -379,6 +379,70 @@ impl ShadowMap {
     }
 }
 
+/// Cache key for skipping redundant shadow passes when `shadowCache` is enabled.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::gfx) struct ShadowCacheKey {
+    sun_angle: f32,
+    moon_angle: f32,
+    snapped_camera: Option<glam::DVec3>,
+    shadow_scene_revision: (u64, u64),
+    ticks: u64,
+    day_time: i64,
+}
+
+fn snap_camera(camera: glam::DVec3, shadow: &Shadow) -> Option<glam::DVec3> {
+    let step = f64::from(shadow.interval);
+    if step > 0.0 {
+        if shadow.euclidean_snap {
+            Some((camera / step).floor() * step)
+        } else {
+            Some((camera / step).trunc() * step)
+        }
+    } else {
+        Some(camera)
+    }
+}
+
+pub(in crate::gfx) fn cache_key_inputs(
+    camera: glam::DVec3,
+    sun_angle: f32,
+    moon_angle: f32,
+    shadow_scene_revision: (u64, u64),
+    ticks: u64,
+    day_time: i64,
+    shadow: &Shadow,
+) -> ShadowCacheKey {
+    ShadowCacheKey {
+        sun_angle,
+        moon_angle,
+        snapped_camera: snap_camera(camera, shadow),
+        shadow_scene_revision,
+        ticks,
+        day_time,
+    }
+}
+
+pub(in crate::gfx) fn cache_key(frame: &super::Frame, shadow: &Shadow) -> ShadowCacheKey {
+    cache_key_inputs(
+        frame.camera,
+        frame.sky.sun_angle,
+        frame.sky.moon_angle,
+        frame.shadow_scene_revision,
+        frame.ticks,
+        frame.pack.day_time,
+        shadow,
+    )
+}
+
+pub(in crate::gfx) fn shadow_cache_hit(
+    cached: Option<&ShadowCacheKey>,
+    key: &ShadowCacheKey,
+    has_shadow_entities: bool,
+    displaced: bool,
+) -> bool {
+    !has_shadow_entities && !displaced && cached == Some(key)
+}
+
 /// The pipelines that draw terrain into the shadow map, for the renderer's instanced draws and,
 /// where they run, its flat ones, and the frame they read (group 3, the uniform alone: the
 /// stages' own group 3 also holds the map being drawn).
@@ -394,6 +458,8 @@ pub struct NativeShadow {
     pub group: wgpu::BindGroup,
     /// `[displacement]`'s grid (gfx/displace.rs's shadow list).
     pub displaced: Option<wgpu::RenderPipeline>,
+    /// Key of the cached shadow map held in `NativeFrame::shadow_map`.
+    cache: Option<ShadowCacheKey>,
 }
 
 /// The entity draw's shader. Like the terrain's (`shader_source`), it declares `Frame` without
@@ -769,6 +835,7 @@ impl NativeShadow {
             entity,
             group,
             displaced,
+            cache: None,
         })
     }
 }
@@ -788,11 +855,30 @@ impl super::native_pack::NativePack {
             encoder,
             mut timing,
             lists,
+            frame,
         } = draws;
         self.frame.shadow_map.clear_blank(encoder);
-        let (Some(lists), Some(shadow)) = (lists, &self.shadow) else {
+        let (Some(lists), Some(shadow)) = (lists, self.shadow.as_mut()) else {
+            if let Some(shadow) = &mut self.shadow {
+                shadow.cache = None;
+            }
             return;
         };
+        let has_entities = lists.entity_quads > 0 || lists.shadow_only_quads > 0;
+        let displaced = self.displacement.is_some();
+        let next_cache_key = if frame.shadow_cache
+            && let Some(camera) = &self.frame.shadow_camera
+        {
+            let key = cache_key(frame, camera);
+            if shadow_cache_hit(shadow.cache.as_ref(), &key, has_entities, displaced) {
+                return;
+            }
+            (!has_entities && !displaced).then_some(key)
+        } else {
+            shadow.cache = None;
+            None
+        };
+        let shadow = &*shadow;
         let map = &self.frame.shadow_map;
         let sections = &lists.sections;
         let [first, solid, translucent] = lists.draws;
@@ -867,6 +953,9 @@ impl super::native_pack::NativePack {
             // Before the GPU-posed outlines (`EntityBatch::append_shadow_only`).
             let first = lists.outline_base - shadow_only * 4;
             pass.draw_indexed(0..shadow_only * 6, first as i32, 0..1);
+        }
+        if let Some(shadow) = &mut self.shadow {
+            shadow.cache = next_cache_key;
         }
     }
 }
@@ -1006,5 +1095,114 @@ mod tests {
         // Already that fine: no distortion.
         assert_eq!(distortion(32.0, 2048), 0.0);
         assert_eq!(distortion(10_000.0, 1024), 0.95);
+    }
+
+    #[test]
+    fn shadow_cache_key_snaps_within_cell_and_invalidates_on_changes() {
+        let shadow = camera(&Settings::default());
+        let key = cache_key_inputs(
+            glam::DVec3::new(5.1, 64.0, 5.1),
+            0.25,
+            0.75,
+            (2, 3),
+            100,
+            6000,
+            &shadow,
+        );
+        // Moving within the same 8-block cell preserves the cache key (negative coordinates too).
+        let same_cell = cache_key_inputs(
+            glam::DVec3::new(5.9, 64.8, 5.9),
+            0.25,
+            0.75,
+            (2, 3),
+            100,
+            6000,
+            &shadow,
+        );
+        assert_eq!(key, same_cell);
+        let neg_a = cache_key_inputs(
+            glam::DVec3::new(-2064.5, 64.0, -2064.5),
+            0.25,
+            0.75,
+            (2, 3),
+            100,
+            6000,
+            &shadow,
+        );
+        let neg_b = cache_key_inputs(
+            glam::DVec3::new(-2064.3, 64.5, -2064.3),
+            0.25,
+            0.75,
+            (2, 3),
+            100,
+            6000,
+            &shadow,
+        );
+        assert_eq!(neg_a, neg_b);
+
+        // Crossing an 8-block snap boundary or changing world/time state invalidates the key.
+        let crossed = cache_key_inputs(
+            glam::DVec3::new(8.1, 64.0, 5.1),
+            0.25,
+            0.75,
+            (2, 3),
+            100,
+            6000,
+            &shadow,
+        );
+        assert_ne!(key, crossed);
+        assert_ne!(
+            key,
+            cache_key_inputs(
+                glam::DVec3::new(5.1, 64.0, 5.1),
+                0.25,
+                0.75,
+                (8, 3),
+                100,
+                6000,
+                &shadow
+            )
+        );
+        assert_ne!(
+            key,
+            cache_key_inputs(
+                glam::DVec3::new(5.1, 64.0, 5.1),
+                0.25,
+                0.75,
+                (2, 3),
+                101,
+                6000,
+                &shadow
+            )
+        );
+        assert_ne!(
+            key,
+            cache_key_inputs(
+                glam::DVec3::new(5.1, 64.0, 5.1),
+                0.25,
+                0.75,
+                (2, 3),
+                100,
+                6001,
+                &shadow
+            )
+        );
+        assert_ne!(
+            key,
+            cache_key_inputs(
+                glam::DVec3::new(5.1, 64.0, 5.1),
+                0.26,
+                0.75,
+                (2, 3),
+                100,
+                6000,
+                &shadow
+            )
+        );
+
+        assert!(shadow_cache_hit(Some(&key), &same_cell, false, false));
+        assert!(!shadow_cache_hit(None, &same_cell, false, false));
+        assert!(!shadow_cache_hit(Some(&key), &same_cell, true, false));
+        assert!(!shadow_cache_hit(Some(&key), &same_cell, false, true));
     }
 }

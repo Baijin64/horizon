@@ -49,7 +49,7 @@ Every preset also turns on the optimizations that leave the picture as it is: as
 | | sky, fog, weather, animated textures, distant plant dither (`ditherCutoutMips`, off by default: cutouts from 64 texels up), resolution scale, dynamic resolution and its target FPS, anti-aliasing (FXAA or TAA), TAA upscaling, screenshot quality, frame generation | `horizon-graphics.txt` |
 | Performance | chunk builder | `options.txt` |
 | | chunk updates and upload budget per frame, worker threads, parallel tick, cave culling, GPU culling, entity and particle culling modes, leaf culling, battery mode, and the block-entity caches (shulker boxes, signs, decorated pots, bells, chests, banners, copper golem statues) | `horizon-graphics.txt` |
-| Shaders | **Shader Packs...**: the list of shader packs, Horizon's `.hshader` ones and `shaders/` folder ones ([shaders.md](shaders.md)), and the picked pack's options; shadow cache | `horizon-graphics.txt`, the pack's own options file |
+| Shaders | **Shader Packs...**: the list of shader packs, Horizon's `.hshader` ones and `shaders/` folder ones ([shaders.md](shaders.md)), and the picked pack's options; shadow cache; ray tracing (Auto, On, Off) | `horizon-graphics.txt`, the pack's own options file |
 | Advanced | present mode, frame pacing, graphics API, translucent batching, performance overlay (FPS, frame/CPU/GPU times, frame-time graph) | `horizon-graphics.txt` |
 | HDR | HDR, calibration, black level, peak brightness, paper white, UI brightness, look | `horizon-graphics.txt` |
 

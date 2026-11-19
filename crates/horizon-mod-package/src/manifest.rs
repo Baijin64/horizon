@@ -2014,9 +2014,12 @@ issues = \"http://example.org/issues\"
             zip.write_all(bytes).unwrap();
             zip.finish().unwrap();
             let error = Package::read(&archive).err().unwrap();
-            // The one place a module may sit is refused for want of `[wasm]`.
+            // The one place a module may sit is refused for want of `[wasm]`; a name that
+            // isn't plain is refused before its bytes are looked at.
             let expected = if *name == WASM {
                 WasmError::Undeclared.to_string()
+            } else if name.starts_with("./") {
+                "invalid package path".to_string()
             } else {
                 "unsupported executable file".to_string()
             };

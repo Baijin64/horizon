@@ -1022,7 +1022,8 @@ pub(super) fn content_root(
             .flat_map(|m| m.content.namespaces.iter().cloned())
             .collect(),
     );
-    super::code_block_owners::set(
+    super::code_block_owners::stage(
+        overlay.root.prepared(),
         overlay
             .mods
             .iter()

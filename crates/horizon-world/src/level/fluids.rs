@@ -753,6 +753,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     /// `FlowingFluid.tick` for the fluid at `pos`.
     pub(crate) fn fluid_tick(&mut self, pos: BlockPos) {
         let mut state = self.state(pos);
+        if self.level.template_suppressed(state) {
+            return;
+        }
         let mut fluid = self.b.fluid(state);
         let kind = fluid.kind();
         let name = match kind {

@@ -28,35 +28,44 @@ fn scrubber(home: &Path, log: &str) -> Scrubber {
     servers(s, home, log)
 }
 
-/// Also hides the hosts of the servers in `home`'s list (servers.dat), of the last one typed in
-/// Direct Connection (options.txt's `lastServer`) and of those `log` shows the game connecting to
-/// (its `Connecting to <host>, <port>` lines). Only names with a dot and a letter, as a server's
-/// domain has: a bare word like `minecraft` would hide that word everywhere, and IP addresses
-/// are already hidden. The official server is no secret and helps read the report.
+/// Also hides the hosts of the servers in `home`'s list (servers.dat, the hidden entries Direct
+/// Connection leaves too), of every `lastServer` line in options.txt and of those `log` shows the
+/// game connecting to (its `Connecting to <host>, <port>` lines). Each host goes as written and
+/// as the game connects to it (`parse_address`: an international name in its ASCII form), with
+/// and without a trailing dot. Only names with a dot and a letter, as a server's domain has: a
+/// bare word like `minecraft` would hide that word everywhere, and IP addresses are already
+/// hidden. The official server is no secret and helps read the report.
 fn servers(mut s: Scrubber, home: &Path, log: &str) -> Scrubber {
-    let listed = server_list::List::load(home)
-        .servers()
+    let listed = server_list::List::load(home).addresses();
+    // Read as bytes: one byte that isn't UTF-8 elsewhere in the file mustn't lose these lines.
+    let options = std::fs::read(home.join("options.txt")).unwrap_or_default();
+    let typed = crate::export::option_lines(&options)
         .into_iter()
-        .map(|server| server.ip);
-    let last = std::fs::read_to_string(home.join("options.txt"))
-        .unwrap_or_default()
-        .lines()
-        .find_map(|l| l.strip_prefix("lastServer:").map(str::to_owned));
+        .filter_map(|line| line.strip_prefix(b"lastServer:"))
+        .map(|value| {
+            let value = value.strip_suffix(b"\n").unwrap_or(value);
+            let value = value.strip_suffix(b"\r").unwrap_or(value);
+            String::from_utf8_lossy(value).into_owned()
+        });
     let connected = log.lines().filter_map(|line| {
         let (host, port) = line.split_once("Connecting to ")?.1.rsplit_once(", ")?;
         port.trim().parse::<u16>().ok().map(|_| host.to_owned())
     });
+    let bare = |host: &str| host.trim_end_matches('.').to_ascii_lowercase();
     let official: Vec<String> = std::iter::once(server_list::OFFICIAL_ADDRESS)
         .chain(server_list::OFFICIAL_PREVIOUS.iter().copied())
-        .map(|a| host(a).to_ascii_lowercase())
+        .map(|a| bare(host(a)))
         .collect();
-    for address in listed.chain(last).chain(connected) {
-        let host = host(&address);
-        if host.contains('.')
-            && host.contains(|c: char| c.is_ascii_alphabetic())
-            && !official.contains(&host.to_ascii_lowercase())
-        {
-            s = s.host(host);
+    for address in listed.into_iter().chain(typed).chain(connected) {
+        let ascii = horizon_platform::servers::parse_address(address.trim()).map(|(h, _)| h);
+        for spelling in std::iter::once(host(&address).to_owned()).chain(ascii) {
+            let name = spelling.trim_end_matches('.');
+            if name.contains('.')
+                && name.contains(|c: char| c.is_alphabetic())
+                && !official.contains(&bare(name))
+            {
+                s = s.host(name).host(&format!("{name}."));
+            }
         }
     }
     s
@@ -123,13 +132,38 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
-        let mut list = server_list::List::load(&home);
-        list.add("Friends", "mc.friends-castle.org:25570").unwrap();
-        list.add("Home", "minecraft").unwrap();
-        list.save(&home).unwrap();
+        use horizon_platform::world::nbt::{self, Limits, NamedTag, Tag};
+        let server = |ip: &str, hidden: i8| {
+            Tag::compound([
+                ("name", Tag::String("Server".into())),
+                ("ip", Tag::String(ip.into())),
+                ("hidden", Tag::Byte(hidden)),
+            ])
+        };
+        let list = Tag::compound([(
+            "servers",
+            Tag::List(vec![
+                server("mc.friends-castle.org:25570", 0),
+                server("minecraft", 0),
+                server("bücher.example", 0),
+                // Direct Connection's join of a server not in the list.
+                server("joined.example.net", 1),
+            ]),
+        )]);
+        let bytes = nbt::write_named(
+            &NamedTag {
+                name: "".into(),
+                tag: list,
+            },
+            Limits::default(),
+        )
+        .unwrap();
+        std::fs::write(home.join("servers.dat"), bytes).unwrap();
+        // Two lastServer lines, one with a trailing dot and a lone CR after it, and a byte that
+        // isn't UTF-8 in another line.
         std::fs::write(
             home.join("options.txt"),
-            "lang:en_us\nlastServer:typed.example.net\n",
+            b"lang:en_us\nlastServer:first.example.net.\rmodel\xff:1\nlastServer:typed.example.net\n",
         )
         .unwrap();
         let official = host(server_list::OFFICIAL_ADDRESS).to_owned();
@@ -138,6 +172,8 @@ mod tests {
              [12:00:01] [Render thread/INFO]: Joining play.secret-host.net as a 1.21 server\n\
              [12:00:02] [Server Connector #2/INFO]: Connecting to {official}, 25565\n\
              [12:01:00] [Render thread/INFO]: Left MC.Friends-Castle.org:25570 and typed.example.net\n\
+             [12:01:01] [Render thread/INFO]: Pinged joined.example.net, first.example.net and first.example.net.\n\
+             [12:01:02] [Render thread/INFO]: Resolved xn--bcher-kva.example for bücher.example\n\
              [12:02:00] [Render thread/INFO]: Loaded minecraft textures for the server list"
         );
 
@@ -149,6 +185,8 @@ mod tests {
                  [12:00:01] [Render thread/INFO]: Joining <private> as a 1.21 server\n\
                  [12:00:02] [Server Connector #2/INFO]: Connecting to {official}, 25565\n\
                  [12:01:00] [Render thread/INFO]: Left <private>:25570 and <private>\n\
+                 [12:01:01] [Render thread/INFO]: Pinged <private>, <private> and <private>\n\
+                 [12:01:02] [Render thread/INFO]: Resolved <private> for <private>\n\
                  [12:02:00] [Render thread/INFO]: Loaded minecraft textures for the server list"
             )
         );

@@ -64,13 +64,7 @@ impl Scrubber {
     }
 
     pub fn scrub(&self, text: &str) -> String {
-        let mut out = text.to_owned();
-        for term in &self.terms {
-            out = out.replace(term.as_str(), PRIVATE);
-        }
-        for host in &self.hosts {
-            out = replace_any_case(&out, host);
-        }
+        let mut out = self.known(text);
         out = user_folders(&out);
         out = replace_tokens(&out, email_at);
         out = replace_tokens(&out, ipv4_at);
@@ -81,21 +75,48 @@ impl Scrubber {
         }
         out
     }
-}
 
-/// `text` with every ASCII-case-insensitive match of the lowercase `host` replaced by [`PRIVATE`].
-/// ASCII lowercasing keeps every byte where it was, so the matches' offsets hold in `text`.
-fn replace_any_case(text: &str, host: &str) -> String {
-    let lower = text.to_ascii_lowercase();
-    let mut out = String::with_capacity(text.len());
-    let mut copied = 0;
-    for (at, _) in lower.match_indices(host) {
-        out.push_str(&text[copied..at]);
-        out.push_str(PRIVATE);
-        copied = at + host.len();
+    /// `text` with the known terms and hosts replaced by [`PRIVATE`]. Every match is found in the
+    /// text as it came and overlapping ones become one, so a term inside a host (a world named
+    /// `Play`, the host `play.example.net`) or a term that runs past a host's end hide both whole.
+    fn known(&self, text: &str) -> String {
+        let mut found: Vec<(usize, usize)> = Vec::new();
+        for term in &self.terms {
+            found.extend(
+                text.match_indices(term.as_str())
+                    .map(|(at, m)| (at, at + m.len())),
+            );
+        }
+        if !self.hosts.is_empty() {
+            // ASCII lowercasing keeps every byte where it was: offsets in `lower` hold in `text`.
+            let lower = text.to_ascii_lowercase();
+            for host in &self.hosts {
+                found.extend(
+                    lower
+                        .match_indices(host.as_str())
+                        .map(|(at, m)| (at, at + m.len()))
+                        .filter(|&(start, end)| host_alone(lower.as_bytes(), start, end)),
+                );
+            }
+        }
+        found.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for (start, end) in found {
+            match merged.last_mut() {
+                Some(last) if start < last.1 => last.1 = last.1.max(end),
+                _ => merged.push((start, end)),
+            }
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut copied = 0;
+        for (start, end) in merged {
+            out.push_str(&text[copied..start]);
+            out.push_str(PRIVATE);
+            copied = end;
+        }
+        out.push_str(&text[copied..]);
+        out
     }
-    out.push_str(&text[copied..]);
-    out
 }
 
 /// `/Users/ana/…`, `/home/ana/…`, `C:\Users\Ana Silva\…` (also JSON-escaped): the folder after
@@ -157,6 +178,20 @@ fn replace_tokens(
     }
     out.push_str(&text[copied..]);
     out
+}
+
+/// Whether `start..end` in `bytes` is a whole host name, not part of a longer one or of a word:
+/// `a.b` is not in `data.bin`, `example.net` not in `play.example.net`. A dot after it ends a
+/// sentence (or is a host's trailing dot) unless a label follows.
+fn host_alone(bytes: &[u8], start: usize, end: usize) -> bool {
+    let label = |b: u8| word_byte(b) || b == b'-' || !b.is_ascii();
+    let before = start == 0 || !(label(bytes[start - 1]) || bytes[start - 1] == b'.');
+    let after = match bytes.get(end) {
+        None => true,
+        Some(b'.') => !bytes.get(end + 1).is_some_and(|&b| label(b)),
+        Some(&b) => !label(b),
+    };
+    before && after
 }
 
 fn word_byte(b: u8) -> bool {
@@ -416,6 +451,31 @@ mod tests {
         assert_eq!(
             s.scrub("Saving My World; joined play.example.net:25565, ab"),
             "Saving <private>; joined <private>:25565, ab"
+        );
+    }
+
+    #[test]
+    fn a_term_inside_a_host_or_two_crossing_hosts_hide_all_of_both() {
+        // A world folder named `Play` used to turn the host into `<private>.Secret-Host.net`
+        // before the host was looked for.
+        let s = Scrubber::bare().term("Play").host("Play.Secret-Host.net");
+        assert_eq!(
+            s.scrub("Play in Play.Secret-Host.net, then play.secret-host.net"),
+            "<private> in <private>, then <private>"
+        );
+        // A world named `Net Hub` starts inside the host and ends after it.
+        let s = Scrubber::bare()
+            .term("Net Hub")
+            .host("play.secret-host.net");
+        assert_eq!(s.scrub("to Play.Secret-Host.Net Hub!"), "to <private>!");
+    }
+
+    #[test]
+    fn a_host_hides_only_whole_host_names() {
+        let s = Scrubber::bare().host("a.b").host("playhorizon.dev");
+        assert_eq!(
+            s.scrub("read data.bin, joined play.playhorizon.dev, left a.b. Then A.B:25565"),
+            "read data.bin, joined play.playhorizon.dev, left <private>. Then <private>:25565"
         );
     }
 }

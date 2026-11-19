@@ -39,6 +39,37 @@ fn level_dat() -> Vec<u8> {
     gz.finish().unwrap()
 }
 
+/// servers.dat with `entries` as its list.
+fn servers_dat(entries: &[Tag]) -> Vec<u8> {
+    nbt::write_named(
+        &nbt::NamedTag {
+            name: "".into(),
+            tag: Tag::compound([("servers", Tag::List(entries.to_vec()))]),
+        },
+        Limits::default(),
+    )
+    .unwrap()
+}
+
+/// A server the player added to the list.
+fn shown_server() -> Tag {
+    Tag::compound([
+        ("name", Tag::String("Friends".into())),
+        ("ip", Tag::String("friends.example.net".into())),
+        ("acceptTextures", Tag::Byte(1)),
+        ("hidden", Tag::Byte(0)),
+    ])
+}
+
+/// A server joined through Direct Connection: the game keeps it hidden.
+fn joined_server() -> Tag {
+    Tag::compound([
+        ("name", Tag::String("Minecraft Server".into())),
+        ("ip", Tag::String("secret.example.net".into())),
+        ("hidden", Tag::Byte(1)),
+    ])
+}
+
 fn sha512(bytes: &[u8]) -> String {
     sha2::Sha512::digest(bytes)
         .iter()
@@ -51,10 +82,14 @@ fn home(name: &str) -> PathBuf {
     let home = scratch(name);
     put(
         &home.join("options.txt"),
-        b"lang:fr_ch\r\nlastServer:play.example.net:25570\r\nfov:0.5\r\n",
+        // The game also ends a line at a lone CR.
+        b"lang:fr_ch\r\nlastServer:play.example.net:25570\r\nfov:0.5\rlastServer:typed.example.net\rgamma:1\n",
     );
     put(&home.join("horizon-graphics.txt"), b"preset:high\n");
-    put(&home.join("servers.dat"), b"\x0a\x00\x00\x00");
+    put(
+        &home.join("servers.dat"),
+        &servers_dat(&[shown_server(), joined_server()]),
+    );
     put(&home.join("resourcepacks/Glass.zip"), b"glass pack");
     put(&home.join("resourcepacks/Own.zip"), b"own pack");
     put(
@@ -157,8 +192,13 @@ fn a_zip_has_the_instance_and_the_picked_world_and_nothing_private() {
     };
     assert!(player.get(&"UUID".into()).is_none());
     assert_eq!(player.get(&"XpLevel".into()), Some(&Tag::Int(7)));
-    // The options go without the last server typed in Direct Connection.
-    assert_eq!(read(&out, "options.txt"), b"lang:fr_ch\r\nfov:0.5\r\n");
+    // The options go without the servers typed in Direct Connection, every other byte kept; the
+    // server list without the hidden entry those joins left, the shown one whole.
+    assert_eq!(
+        read(&out, "options.txt"),
+        b"lang:fr_ch\r\nfov:0.5\rgamma:1\n"
+    );
+    assert_eq!(read(&out, "servers.dat"), servers_dat(&[shown_server()]));
     assert!(!out.with_extension("part").exists());
 
     assert!(export(&home, "Hardcore", Format::Zip, &["../x".into()], &[], &out).is_err());

@@ -82,11 +82,36 @@ impl Scrubber {
 
     /// The host pass, before every other one and on the text as it came: each registered host
     /// standing alone becomes [`PRIVATE`], overlapping matches (a host and its trailing-dot
-    /// spelling) as one. A host right after `@` is an e-mail address's domain: it is left for the
-    /// e-mail pass to hide the whole address. With no host registered the text is unchanged.
+    /// spelling) as one, except where it crosses what the term or e-mail pass will match: that
+    /// pass then hides the whole term or address, as without hosts. With no host registered the
+    /// text is unchanged.
     fn hide_hosts(&self, text: &str) -> String {
         if self.hosts.is_empty() {
             return text.to_owned();
+        }
+        // What the term and e-mail passes match in the text as it came: a host inside one of these
+        // is left for that pass, which hides the whole term or address.
+        let mut theirs: Vec<(usize, usize)> = Vec::new();
+        for term in &self.terms {
+            theirs.extend(
+                text.match_indices(term.as_str())
+                    .map(|(at, m)| (at, at + m.len())),
+            );
+        }
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match text
+                .is_char_boundary(i)
+                .then(|| email_at(bytes, i))
+                .flatten()
+            {
+                Some((len, _)) => {
+                    theirs.push((i, i + len));
+                    i += len;
+                }
+                None => i += 1,
+            }
         }
         // ASCII lowercasing keeps every character where it was: offsets in `lower` hold in `text`.
         let lower = text.to_ascii_lowercase();
@@ -96,7 +121,8 @@ impl Scrubber {
                 lower
                     .match_indices(host.as_str())
                     .map(|(at, m)| (at, at + m.len()))
-                    .filter(|&(start, end)| host_alone(text, start, end)),
+                    .filter(|&(start, end)| host_alone(text, start, end))
+                    .filter(|&(start, end)| !theirs.iter().any(|&(s, e)| start < e && s < end)),
             );
         }
         found.sort_unstable();
@@ -183,12 +209,11 @@ fn replace_tokens(
 /// Whether `start..end` in `text` is a whole host name: the characters next to it are not a host
 /// name's (ASCII letter, digit, `-`, `.`), so `a.b` is not in `data.bin` and `example.net` not in
 /// `play.example.net`; a host before a sentence's full stop matches as its trailing-dot spelling.
-/// Not right after `@`: that is an e-mail address's domain.
 fn host_alone(text: &str, start: usize, end: usize) -> bool {
     let host_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
     let before = text[..start].chars().next_back();
     let after = text[end..].chars().next();
-    !before.is_some_and(|c| host_char(c) || c == '@') && !after.is_some_and(host_char)
+    !before.is_some_and(host_char) && !after.is_some_and(host_char)
 }
 
 fn word_byte(b: u8) -> bool {
@@ -475,6 +500,71 @@ mod tests {
         let mail = "mail alice+private@friends.example.net now";
         assert_eq!(s.scrub(mail), "mail <email> now");
         assert_eq!(s.scrub(mail), Scrubber::bare().scrub(mail));
+        // Outside an address the e-mail pass matches, the host is hidden even after `@`.
+        assert_eq!(s.scrub("@friends.example.net"), "@<private>");
+        assert_eq!(
+            s.scrub("https://user:pass@friends.example.net/"),
+            "https://user:pass@<private>/"
+        );
+        // A trailing dot ends the address with an empty label: the e-mail pass takes none of it.
+        assert_eq!(s.scrub("alice@friends.example.net."), "alice@<private>");
+        assert_eq!(s.scrub("ssh://git@friends.example.net"), "ssh://<email>");
+    }
+
+    #[test]
+    fn a_host_inside_an_e_mail_address_or_a_term_leaves_it_whole() {
+        let term = "friends.example.net Private Survival";
+        let with = Scrubber::bare().term(term).host("friends.example.net");
+        let without = Scrubber::bare().term(term);
+        for text in [
+            "alice+friends.example.net@example.org",
+            "Saving friends.example.net Private Survival/region",
+        ] {
+            assert_eq!(with.scrub(text), without.scrub(text), "{text}");
+        }
+        assert_eq!(
+            with.scrub("alice+friends.example.net@example.org"),
+            "<email>"
+        );
+        assert_eq!(
+            with.scrub("Saving friends.example.net Private Survival/region"),
+            "Saving <private>/region"
+        );
+    }
+
+    /// Registering a host never shows what the scrubber hid without it, and hides the host.
+    #[test]
+    fn a_host_only_ever_hides_more() {
+        let term = "friends.example.net Private Survival";
+        let with = Scrubber::bare().term(term).host("friends.example.net");
+        let without = Scrubber::bare().term(term);
+        let secrets = [
+            "alice",
+            "+private@",
+            "Private Survival",
+            "192.168.1.20",
+            "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+            "Ana Silva",
+        ];
+        for line in [
+            "alice+friends.example.net@example.org",
+            "Saving friends.example.net Private Survival/region",
+            "@friends.example.net",
+            "https://user:pass@friends.example.net/",
+            "alice@friends.example.net.",
+            "alice+private@friends.example.net",
+            "ssh://git@friends.example.net",
+            r"joined Friends.Example.NET from 192.168.1.20 as 069a79f4-44e9-4726-a5be-fca90e38aaf5 in C:\Users\Ana Silva\AppData",
+        ] {
+            let (hid, shown) = (without.scrub(line), with.scrub(line));
+            for secret in secrets.iter().filter(|s| !hid.contains(**s)) {
+                assert!(!shown.contains(*secret), "{secret} in {shown}");
+            }
+            assert!(
+                !shown.to_ascii_lowercase().contains("friends.example.net"),
+                "{shown}"
+            );
+        }
     }
 
     #[test]

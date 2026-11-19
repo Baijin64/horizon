@@ -2104,6 +2104,12 @@ mod tests {
             };
             let a = enchanted(&[("minecraft:sharpness", 5), ("minecraft:unbreaking", 3)]);
             let b = enchanted(&[("minecraft:unbreaking", 3), ("minecraft:sharpness", 5)]);
+            // Each keeps the order it was given in, for saving and sending.
+            assert_ne!(
+                a.crafting_enchantments(),
+                b.crafting_enchantments(),
+                "{item}"
+            );
             assert!(a.same_item_same_components(&b), "{item}");
             assert!(a.matches(&b), "{item}");
             assert_eq!(hash(&a), hash(&b), "{item}");

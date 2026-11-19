@@ -49,7 +49,10 @@ fn sha512(bytes: &[u8]) -> String {
 /// A game folder with settings, packs, a mod, two worlds, and what never goes out.
 fn home(name: &str) -> PathBuf {
     let home = scratch(name);
-    put(&home.join("options.txt"), b"lang:fr_ch\n");
+    put(
+        &home.join("options.txt"),
+        b"lang:fr_ch\r\nlastServer:play.example.net:25570\r\nfov:0.5\r\n",
+    );
     put(&home.join("horizon-graphics.txt"), b"preset:high\n");
     put(&home.join("servers.dat"), b"\x0a\x00\x00\x00");
     put(&home.join("resourcepacks/Glass.zip"), b"glass pack");
@@ -154,6 +157,8 @@ fn a_zip_has_the_instance_and_the_picked_world_and_nothing_private() {
     };
     assert!(player.get(&"UUID".into()).is_none());
     assert_eq!(player.get(&"XpLevel".into()), Some(&Tag::Int(7)));
+    // The options go without the last server typed in Direct Connection.
+    assert_eq!(read(&out, "options.txt"), b"lang:fr_ch\r\nfov:0.5\r\n");
     assert!(!out.with_extension("part").exists());
 
     assert!(export(&home, "Hardcore", Format::Zip, &["../x".into()], &[], &out).is_err());

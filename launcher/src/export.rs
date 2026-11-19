@@ -5,7 +5,7 @@
 //! Only what makes the instance goes in, from a fixed list ([`FILES`], [`FOLDERS`]): never logs,
 //! screenshots, backups, caches, or anything tied to the player's account. A world goes without
 //! its per-player files (`playerdata/`, `stats/`, `advancements/`) and its level.dat without the
-//! player's UUID.
+//! player's UUID; options.txt goes without the last server the player typed in.
 //!
 //! In a `.mrpack`, a resource pack the browser installed from Modrinth, still the same file, is
 //! listed by its download (`files`, with its SHA-1 and SHA-512) instead of being copied; the
@@ -141,9 +141,10 @@ fn write(
         Format::Zip => "",
     };
     for (rel, file) in files {
-        let bytes = match rel.ends_with("/level.dat") {
-            true => shareable_level(file)?,
-            false => fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
+        let bytes = match rel.as_str() {
+            rel if rel.ends_with("/level.dat") => shareable_level(file)?,
+            "options.txt" => shareable_options(file)?,
+            _ => fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?,
         };
         zip.start_file(format!("{prefix}{rel}"), options)
             .map_err(|e| e.to_string())?;
@@ -198,6 +199,18 @@ fn walk(home: &Path, dir: &Path, skip: &[&str], out: &mut Vec<(String, PathBuf)>
             out.push((rel.to_string_lossy().replace('\\', "/"), path));
         }
     }
+}
+
+/// options.txt without `lastServer`, the address the player last typed in Direct Connection: the
+/// only server address the game keeps there. Every other line goes as it is.
+fn shareable_options(file: &Path) -> Result<Vec<u8>, String> {
+    let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    Ok(bytes
+        .split_inclusive(|&b| b == b'\n')
+        .filter(|line| !line.starts_with(b"lastServer:"))
+        .flatten()
+        .copied()
+        .collect())
 }
 
 /// A world's level.dat without the player's UUID; unreadable, it goes as it is.

@@ -555,6 +555,11 @@ impl LevelAccess for GameLevel<'_> {
         state: &mut BlockStateId,
         handled: &mut bool,
     ) {
+        if self.block_owner_off(*state) {
+            // Its mod is off: the template's own tick would rewrite the block.
+            *handled = true;
+            return;
+        }
         if self.native_authoritative {
             // Any block the hook writes moves the world's revision on.
             let revision = self.world.revision;
@@ -571,6 +576,10 @@ impl LevelAccess for GameLevel<'_> {
         state: &mut BlockStateId,
         handled: &mut bool,
     ) {
+        if self.block_owner_off(*state) {
+            *handled = true;
+            return;
+        }
         if self.native_authoritative {
             // Any block the hook writes moves the world's revision on.
             let revision = self.world.revision;
@@ -590,6 +599,10 @@ impl LevelAccess for GameLevel<'_> {
         neighbour: BlockStateId,
         new: &mut Option<BlockStateId>,
     ) {
+        if self.block_owner_off(state) {
+            *new = Some(state);
+            return;
+        }
         if self.native_authoritative {
             self.native_update_shape(
                 ticks,

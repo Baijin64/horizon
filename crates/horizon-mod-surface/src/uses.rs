@@ -1517,7 +1517,7 @@ impl<'a, 's, 't> Resolver<'a, 's, 't> {
             && module.variants.contains(&(*owner, *variant))
             && inside.iter().all(in_mod)
             && !module.others.contains(*variant)
-            && api_names_of(*owner, module, &self.index.by_name).is_empty()
+            && api_names_of(owner, module, &self.index.by_name).is_empty()
             && !module.roots.contains(*owner)
             && !module.bound.contains_key(*owner)
             && !module.modules.contains(*owner)

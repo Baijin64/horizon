@@ -13,7 +13,7 @@ pub const PRIVATE: &str = "<private>";
 pub struct Scrubber {
     /// Exact terms to hide, longest first.
     terms: Vec<String>,
-    /// Host names to hide in any case, lowercase, longest first.
+    /// Host names to hide in any ASCII case, lowercase, each also with its trailing dot.
     hosts: Vec<String>,
     user: Option<String>,
 }
@@ -52,19 +52,23 @@ impl Scrubber {
         self
     }
 
-    /// Hides the host name `host` wherever it appears, in any case: `Play.Example.net` and
-    /// `play.example.net` are the same server. Like [`Self::term`], under 3 characters is ignored.
+    /// Hides the host name `host` wherever it stands alone, in any ASCII case and with or without
+    /// a trailing dot: `Play.Example.net.` and `play.example.net` are the same server. Like
+    /// [`Self::term`], under 3 characters is ignored.
     pub fn host(mut self, host: &str) -> Self {
-        let host = host.trim().to_ascii_lowercase();
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
         if host.len() >= 3 && !self.hosts.contains(&host) {
+            self.hosts.push(format!("{host}."));
             self.hosts.push(host);
-            self.hosts.sort_by_key(|h| std::cmp::Reverse(h.len()));
         }
         self
     }
 
     pub fn scrub(&self, text: &str) -> String {
-        let mut out = self.known(text);
+        let mut out = self.hide_hosts(text);
+        for term in &self.terms {
+            out = out.replace(term.as_str(), PRIVATE);
+        }
         out = user_folders(&out);
         out = replace_tokens(&out, email_at);
         out = replace_tokens(&out, ipv4_at);
@@ -76,28 +80,24 @@ impl Scrubber {
         out
     }
 
-    /// `text` with the known terms and hosts replaced by [`PRIVATE`]. Every match is found in the
-    /// text as it came and overlapping ones become one, so a term inside a host (a world named
-    /// `Play`, the host `play.example.net`) or a term that runs past a host's end hide both whole.
-    fn known(&self, text: &str) -> String {
-        let mut found: Vec<(usize, usize)> = Vec::new();
-        for term in &self.terms {
-            found.extend(
-                text.match_indices(term.as_str())
-                    .map(|(at, m)| (at, at + m.len())),
-            );
+    /// The host pass, before every other one and on the text as it came: each registered host
+    /// standing alone becomes [`PRIVATE`], overlapping matches (a host and its trailing-dot
+    /// spelling) as one. A host right after `@` is an e-mail address's domain: it is left for the
+    /// e-mail pass to hide the whole address. With no host registered the text is unchanged.
+    fn hide_hosts(&self, text: &str) -> String {
+        if self.hosts.is_empty() {
+            return text.to_owned();
         }
-        if !self.hosts.is_empty() {
-            // ASCII lowercasing keeps every byte where it was: offsets in `lower` hold in `text`.
-            let lower = text.to_ascii_lowercase();
-            for host in &self.hosts {
-                found.extend(
-                    lower
-                        .match_indices(host.as_str())
-                        .map(|(at, m)| (at, at + m.len()))
-                        .filter(|&(start, end)| host_alone(lower.as_bytes(), start, end)),
-                );
-            }
+        // ASCII lowercasing keeps every character where it was: offsets in `lower` hold in `text`.
+        let lower = text.to_ascii_lowercase();
+        let mut found: Vec<(usize, usize)> = Vec::new();
+        for host in &self.hosts {
+            found.extend(
+                lower
+                    .match_indices(host.as_str())
+                    .map(|(at, m)| (at, at + m.len()))
+                    .filter(|&(start, end)| host_alone(text, start, end)),
+            );
         }
         found.sort_unstable();
         let mut merged: Vec<(usize, usize)> = Vec::new();
@@ -180,18 +180,15 @@ fn replace_tokens(
     out
 }
 
-/// Whether `start..end` in `bytes` is a whole host name, not part of a longer one or of a word:
-/// `a.b` is not in `data.bin`, `example.net` not in `play.example.net`. A dot after it ends a
-/// sentence (or is a host's trailing dot) unless a label follows.
-fn host_alone(bytes: &[u8], start: usize, end: usize) -> bool {
-    let label = |b: u8| word_byte(b) || b == b'-' || !b.is_ascii();
-    let before = start == 0 || !(label(bytes[start - 1]) || bytes[start - 1] == b'.');
-    let after = match bytes.get(end) {
-        None => true,
-        Some(b'.') => !bytes.get(end + 1).is_some_and(|&b| label(b)),
-        Some(&b) => !label(b),
-    };
-    before && after
+/// Whether `start..end` in `text` is a whole host name: the characters next to it are not a host
+/// name's (ASCII letter, digit, `-`, `.`), so `a.b` is not in `data.bin` and `example.net` not in
+/// `play.example.net`; a host before a sentence's full stop matches as its trailing-dot spelling.
+/// Not right after `@`: that is an e-mail address's domain.
+fn host_alone(text: &str, start: usize, end: usize) -> bool {
+    let host_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
+    let before = text[..start].chars().next_back();
+    let after = text[end..].chars().next();
+    !before.is_some_and(|c| host_char(c) || c == '@') && !after.is_some_and(host_char)
 }
 
 fn word_byte(b: u8) -> bool {
@@ -454,28 +451,46 @@ mod tests {
         );
     }
 
+    /// With no host registered, terms, e-mail and IP addresses come out as they always have: one
+    /// term after another, each pass on the one before's output.
     #[test]
-    fn a_term_inside_a_host_or_two_crossing_hosts_hide_all_of_both() {
-        // A world folder named `Play` used to turn the host into `<private>.Secret-Host.net`
-        // before the host was looked for.
+    fn without_hosts_terms_and_addresses_are_hidden_as_before() {
+        let s = Scrubber::bare().term("PrivateWorld").term("WorldWorld");
+        assert_eq!(
+            s.scrub("PrivateWorldWorldWorld192.168.1.5"),
+            "<private><private><ip>"
+        );
+        let s = Scrubber::bare().term("My World");
+        assert_eq!(
+            s.scrub("Saving My World/region and ana.b+mc@example.org from 10.0.0.1:25565"),
+            "Saving <private>/region and <email> from <ip>"
+        );
+    }
+
+    #[test]
+    fn a_host_is_hidden_alone_in_any_case_and_an_e_mail_whole() {
+        let s = Scrubber::bare().host("friends.example.net");
+        assert_eq!(s.scrub("“Friends.Example.NET”"), "“<private>”");
+        // The domain of an e-mail address is left to the e-mail pass, which hides all of it.
+        let mail = "mail alice+private@friends.example.net now";
+        assert_eq!(s.scrub(mail), "mail <email> now");
+        assert_eq!(s.scrub(mail), Scrubber::bare().scrub(mail));
+    }
+
+    #[test]
+    fn a_host_is_hidden_before_terms_and_only_as_a_whole_name() {
+        // A world folder named `Play` used to turn the host into `<private>.Secret-Host.net`.
         let s = Scrubber::bare().term("Play").host("Play.Secret-Host.net");
         assert_eq!(
             s.scrub("Play in Play.Secret-Host.net, then play.secret-host.net"),
             "<private> in <private>, then <private>"
         );
-        // A world named `Net Hub` starts inside the host and ends after it.
-        let s = Scrubber::bare()
-            .term("Net Hub")
-            .host("play.secret-host.net");
-        assert_eq!(s.scrub("to Play.Secret-Host.Net Hub!"), "to <private>!");
-    }
-
-    #[test]
-    fn a_host_hides_only_whole_host_names() {
-        let s = Scrubber::bare().host("a.b").host("playhorizon.dev");
+        // Not inside a longer name or word; a full stop after it goes with it, as its
+        // trailing-dot spelling.
+        let s = Scrubber::bare().host("a.b");
         assert_eq!(
             s.scrub("read data.bin, joined play.playhorizon.dev, left a.b. Then A.B:25565"),
-            "read data.bin, joined play.playhorizon.dev, left <private>. Then <private>:25565"
+            "read data.bin, joined play.playhorizon.dev, left <private> Then <private>:25565"
         );
     }
 }

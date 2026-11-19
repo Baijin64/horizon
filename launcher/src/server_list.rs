@@ -172,7 +172,13 @@ impl List {
     /// The list as a servers.dat holding only the shown entries, each with all its fields: what
     /// an export shares, without the addresses the player typed in Direct Connection.
     pub fn shown_file(&self) -> Result<Vec<u8>, String> {
-        file(self.entries.iter().filter(|e| !hidden(e)))
+        // The game also reads a float or double flag (`asByte`: the low byte of its floor).
+        let floating = |e: &Compound| match e.get(&key("hidden")) {
+            Some(Tag::Float(bits)) => f32::from_bits(*bits).floor() as i32 & 0xff != 0,
+            Some(Tag::Double(bits)) => f64::from_bits(*bits).floor() as i32 & 0xff != 0,
+            _ => false,
+        };
+        file(self.entries.iter().filter(|e| !hidden(e) && !floating(e)))
     }
 
     /// Writes the list as the game does: a new file first, the old one kept as `servers.dat_old`.

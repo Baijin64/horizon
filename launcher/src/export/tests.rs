@@ -70,6 +70,14 @@ fn joined_server() -> Tag {
     ])
 }
 
+/// A hidden entry whose flag another tool wrote as a double, which the game reads as hidden.
+fn joined_double_server() -> Tag {
+    Tag::compound([
+        ("ip", Tag::String("double.example.net".into())),
+        ("hidden", Tag::Double(1.0f64.to_bits())),
+    ])
+}
+
 fn sha512(bytes: &[u8]) -> String {
     sha2::Sha512::digest(bytes)
         .iter()
@@ -88,7 +96,7 @@ fn home(name: &str) -> PathBuf {
     put(&home.join("horizon-graphics.txt"), b"preset:high\n");
     put(
         &home.join("servers.dat"),
-        &servers_dat(&[shown_server(), joined_server()]),
+        &servers_dat(&[shown_server(), joined_server(), joined_double_server()]),
     );
     put(&home.join("resourcepacks/Glass.zip"), b"glass pack");
     put(&home.join("resourcepacks/Own.zip"), b"own pack");

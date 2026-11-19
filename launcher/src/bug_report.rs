@@ -64,7 +64,7 @@ fn servers(mut s: Scrubber, home: &Path, log: &str) -> Scrubber {
                 && name.contains(|c: char| c.is_alphabetic())
                 && !official.contains(&bare(name))
             {
-                s = s.host(name).host(&format!("{name}."));
+                s = s.host(name);
             }
         }
     }

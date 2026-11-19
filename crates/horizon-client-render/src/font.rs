@@ -74,6 +74,22 @@ struct SheetCell {
     h: u32,
     glyph: Glyph,
 }
+impl SheetCell {
+    /// The cell's RGBA rows, or `None` where the cell reaches past the sheet.
+    fn pixels(&self) -> Option<Vec<u8>> {
+        let (stride, pixels) = (self.sheet.0 as usize, &self.sheet.1);
+        let (x, w) = (self.x as usize, self.w as usize);
+        if x + w > stride {
+            return None;
+        }
+        let mut rgba = Vec::with_capacity(w * self.h as usize * 4);
+        for y in self.y as usize..(self.y + self.h) as usize {
+            let at = (y * stride + x) * 4;
+            rgba.extend_from_slice(pixels.get(at..at + w * 4)?);
+        }
+        Some(rgba)
+    }
+}
 enum BitmapGlyph {
     Atlas(Glyph),
     Sheet(SheetCell),
@@ -300,6 +316,24 @@ fn load_bitmap(
     } else {
         format!("{ns}:{name}")
     };
+    // `chars` rows as code points (a Rust `char` is one), all as long as the first:
+    // vanilla refuses the provider otherwise, and the cells are sized from that width.
+    let rows: Vec<Vec<char>> = p["chars"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_str().map(|s| s.chars().collect()))
+        .collect();
+    let Some(width) = rows.first().map(Vec::len).filter(|w| *w > 0) else {
+        return out;
+    };
+    if let Some(row) = rows.iter().find(|r| r.len() != width) {
+        log::error!(
+            "font sheet {file}: rows of chars have to be the same length              (found: {} code points, expected: {width}); provider skipped",
+            row.len()
+        );
+        return out;
+    }
     let in_atlas = sheets.get(&atlas_name).copied();
     // The sheet: its size, and its pixels when they are not in the atlas.
     let (sw, sh, sheet) = match in_atlas {
@@ -319,16 +353,7 @@ fn load_bitmap(
             }
         },
     };
-    let rows: Vec<Vec<char>> = p["chars"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|r| r.as_str().map(|s| s.chars().collect()))
-        .collect();
-    if rows.is_empty() || rows[0].is_empty() {
-        return out;
-    }
-    let cell_w = sw / rows[0].len() as u32;
+    let cell_w = sw / width as u32;
     let cell_h = sh / rows.len() as u32;
     let height = p["height"].as_f64().unwrap_or(8.0) as f32;
     let ascent = p["ascent"].as_f64().unwrap_or(7.0) as f32;
@@ -879,12 +904,9 @@ impl Font {
                         Some(BitmapGlyph::Sheet(cell))
                             if !(non_fishy && fishy_advance(cell.glyph.advance)) =>
                         {
-                            let (stride, pixels) = (&cell.sheet.0, &cell.sheet.1);
-                            let mut rgba = Vec::with_capacity((cell.w * cell.h * 4) as usize);
-                            for y in cell.y..cell.y + cell.h {
-                                let at = ((y * stride + cell.x) * 4) as usize;
-                                rgba.extend_from_slice(&pixels[at..at + (cell.w * 4) as usize]);
-                            }
+                            let Some(rgba) = cell.pixels() else {
+                                continue;
+                            };
                             let (x, y) =
                                 region.place(cell.w, cell.h, rgba, self.atlas, self.region)?;
                             return Some(Glyph {
@@ -1797,6 +1819,30 @@ mod tests {
             6.0,
             "excluded from what obfuscated text draws"
         );
+    }
+
+    /// `BitmapProvider.Definition`: rows of `chars` of unequal length refuse the provider. Sized
+    /// from the first row, the longer row's last cell reached past the sheet and panicked when drawn.
+    #[test]
+    fn a_bitmap_provider_with_uneven_rows_is_skipped() {
+        let uneven = png(16, 16, |_, _| true);
+        let narrow = png(8, 8, |x, _| x < 2);
+        let def = br#"{"providers":[{"type":"bitmap","file":"minecraft:font/uneven.png","ascent":7,"chars":["ab","cdef"]},{"type":"bitmap","file":"minecraft:font/narrow.png","ascent":7,"chars":["a"]}]}"#;
+        let root = root(
+            "uneven-rows",
+            &[
+                ("assets/minecraft/font/default.json", def),
+                ("assets/minecraft/textures/font/uneven.png", &uneven),
+                ("assets/minecraft/textures/font/narrow.png", &narrow),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(font.glyph('a').advance, 3.0, "'a' from the next provider");
+        let missing = font.glyph('z');
+        let f = font.glyph('f');
+        assert_eq!(f.advance, missing.advance, "'f' is the missing glyph");
+        assert_eq!(f.rect.map(|r| r.u0), missing.rect.map(|r| r.u0));
     }
 
     /// StringDecomposer.iterateFormatted: a `§` that ends a part stops that

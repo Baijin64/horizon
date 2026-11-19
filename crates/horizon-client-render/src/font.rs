@@ -324,14 +324,18 @@ fn load_bitmap(
         .flatten()
         .filter_map(|r| r.as_str().map(|s| s.chars().collect()))
         .collect();
-    let Some(width) = rows.first().map(Vec::len).filter(|w| *w > 0) else {
+    let Some(width) = rows.first().map(Vec::len) else {
         return out;
     };
     if let Some(row) = rows.iter().find(|r| r.len() != width) {
         log::error!(
-            "font sheet {file}: rows of chars have to be the same length              (found: {} code points, expected: {width}); provider skipped",
+            "font sheet {file}: rows of chars have to be the same length \
+             (found: {} code points, expected: {width}); provider skipped",
             row.len()
         );
+        return out;
+    }
+    if width == 0 {
         return out;
     }
     let in_atlas = sheets.get(&atlas_name).copied();

@@ -1,6 +1,7 @@
 //! Block-state facts a mod reads without a position (light, friction, solid render, the
 //! correct-tool rule), a player's harvest rule and a block's redstone conduction: the game's own
-//! tables (`StateFacts`, `Items::correct_for_drops`, the behaviours' conductor flag).
+//! tables (`StateFacts`, the world's `Items::correct_for_drops` as the dig reads it, the
+//! behaviours' conductor flag).
 use super::Game;
 use super::native_server::PlayerRead;
 use horizon_client::items::ItemStack;
@@ -37,7 +38,7 @@ impl Game<'_> {
     ) -> Option<bool> {
         self.pack.assets.registry.state(state)?;
         let name = &self.res.facts().get(state).name;
-        Some(self.res.items().correct_for_drops(Some(stack), name))
+        Some(self.items().correct_for_drops(Some(stack), name))
     }
     /// `Player.hasCorrectToolForDrops(state)` for the stack in the player's selected slot,
     /// without the mods' harvest hooks. None for an unknown state or an unavailable player.
@@ -53,8 +54,7 @@ impl Game<'_> {
         };
         let facts = self.res.facts().get(state);
         Some(
-            self.res
-                .items()
+            self.items()
                 .has_correct_tool_for_drops(held, facts.requires_tool, &facts.name),
         )
     }

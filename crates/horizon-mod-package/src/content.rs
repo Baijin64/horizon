@@ -3452,10 +3452,12 @@ capabilities = ["registries"]
         ] {
             let e = hmod("horizon-ns", MANIFEST_TEXT, &[(name, farmer)]).unwrap_err();
             // `farmer.json.` is already refused as a path part ending in a dot.
-            assert!(
-                e.contains("own namespaces") || e.contains("not a plain"),
-                "{name}: {e}"
-            );
+            let expected = if name.ends_with("farmer.json.") {
+                "not a plain"
+            } else {
+                "own namespaces"
+            };
+            assert!(e.contains(expected), "{name}: {e}");
         }
         // A mod can't take the game's namespace as its id to step past the fence.
         let as_horizon = MANIFEST_TEXT.replacen("id = \"ruby\"", "id = \"horizon\"", 1);

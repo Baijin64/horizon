@@ -67,15 +67,31 @@ use std::{
     sync::Arc,
 };
 
-/// Enchantment id and level, in insertion order.
+/// Enchantment id and level, in insertion order (kept for saving and sending; stacks compare
+/// them as a map, see [`same_levels`]).
 pub type Levels = Vec<(Arc<str>, u32)>;
+
+/// `ItemEnchantments.equals`: vanilla keeps the levels in a map, so two lists with the same
+/// enchantments at the same levels are equal in any order.
+fn same_levels(a: &Levels, b: &Levels) -> bool {
+    a.len() == b.len()
+        && a.iter().all(|entry| b.contains(entry))
+        && b.iter().all(|entry| a.contains(entry))
+}
+
+/// A hash of `levels` that ignores their order, to agree with [`same_levels`].
+fn hash_levels<H: Hasher>(levels: &Levels, state: &mut H) {
+    let mut sorted: Vec<_> = levels.iter().collect();
+    sorted.sort_unstable();
+    sorted.hash(state);
+}
 pub mod trim;
 pub use trim::Trim;
 
 /// A stack's modelled and preserved components. Start with `Default` (or
 /// `ItemStack::data_mut`) and use the fields and setters; component storage may
 /// gain private decoded data alongside its saved form.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 pub struct StackData {
     /// An explicit zero damage component overriding a damaged prototype.
@@ -147,6 +163,75 @@ pub struct StackData {
     /// What the server sent for this stack, for sending it back unchanged.
     pub wire: Wire,
 }
+/// Field by field, except that the enchantment lists compare as maps ([`same_levels`]).
+impl PartialEq for StackData {
+    fn eq(&self, rhs: &Self) -> bool {
+        let Self {
+            damage_set,
+            enchantments,
+            stored_enchantments,
+            repair_cost,
+            explicit_zero_damage,
+            custom_name,
+            kinetic_weapon,
+            consumable,
+            death_protection,
+            potion,
+            potion_extra,
+            trim,
+            container,
+            charged,
+            fireworks,
+            map_id,
+            writable_pages,
+            written,
+            banner_patterns,
+            base_color,
+            ominous_banner,
+            ominous_amplifier,
+            dyed_color,
+            firework_explosion,
+            pot_decorations,
+            bundle_contents,
+            bundle_selected,
+            stew_effects,
+            map_post_processing,
+            other,
+            wire,
+        } = self;
+        same_levels(enchantments, &rhs.enchantments)
+            && same_levels(stored_enchantments, &rhs.stored_enchantments)
+            && *damage_set == rhs.damage_set
+            && *repair_cost == rhs.repair_cost
+            && *explicit_zero_damage == rhs.explicit_zero_damage
+            && *custom_name == rhs.custom_name
+            && *kinetic_weapon == rhs.kinetic_weapon
+            && *consumable == rhs.consumable
+            && *death_protection == rhs.death_protection
+            && *potion == rhs.potion
+            && *potion_extra == rhs.potion_extra
+            && *trim == rhs.trim
+            && *container == rhs.container
+            && *charged == rhs.charged
+            && *fireworks == rhs.fireworks
+            && *map_id == rhs.map_id
+            && *writable_pages == rhs.writable_pages
+            && *written == rhs.written
+            && *banner_patterns == rhs.banner_patterns
+            && *base_color == rhs.base_color
+            && *ominous_banner == rhs.ominous_banner
+            && *ominous_amplifier == rhs.ominous_amplifier
+            && *dyed_color == rhs.dyed_color
+            && *firework_explosion == rhs.firework_explosion
+            && *pot_decorations == rhs.pot_decorations
+            && *bundle_contents == rhs.bundle_contents
+            && *bundle_selected == rhs.bundle_selected
+            && *stew_effects == rhs.stew_effects
+            && *map_post_processing == rhs.map_post_processing
+            && *other == rhs.other
+            && *wire == rhs.wire
+    }
+}
 impl Hash for StackData {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let Self {
@@ -183,8 +268,8 @@ impl Hash for StackData {
             wire: _,
         } = self;
         damage_set.hash(state);
-        enchantments.hash(state);
-        stored_enchantments.hash(state);
+        hash_levels(enchantments, state);
+        hash_levels(stored_enchantments, state);
         repair_cost.hash(state);
         explicit_zero_damage.hash(state);
         custom_name.hash(state);
@@ -1998,6 +2083,36 @@ pub fn command_components(text: &str) -> Result<Tag, String> {
 mod tests {
     use super::*;
     use crate::banner_layer::BannerLayer;
+
+    /// `ItemEnchantments.equals` compares a level map: the same enchantments in
+    /// another order are the same component, so the stacks stack, merge and match
+    /// (and hash alike); another level is still a different component.
+    #[test]
+    fn enchantments_compare_as_a_map_whatever_their_order() {
+        let hash = |stack: &ItemStack| {
+            let mut state = std::collections::hash_map::DefaultHasher::new();
+            stack.hash_item_and_components(&mut state);
+            state.finish()
+        };
+        for item in ["minecraft:diamond_sword", "minecraft:enchanted_book"] {
+            let enchanted = |levels: &[(&str, u32)]| {
+                let mut stack = ItemStack::new(item, 1);
+                for (id, level) in levels {
+                    stack.enchant(id, *level);
+                }
+                stack
+            };
+            let a = enchanted(&[("minecraft:sharpness", 5), ("minecraft:unbreaking", 3)]);
+            let b = enchanted(&[("minecraft:unbreaking", 3), ("minecraft:sharpness", 5)]);
+            assert!(a.same_item_same_components(&b), "{item}");
+            assert!(a.matches(&b), "{item}");
+            assert_eq!(hash(&a), hash(&b), "{item}");
+            let c = enchanted(&[("minecraft:unbreaking", 2), ("minecraft:sharpness", 5)]);
+            assert!(!a.same_item_same_components(&c), "{item}");
+            let d = enchanted(&[("minecraft:sharpness", 5)]);
+            assert!(!a.same_item_same_components(&d), "{item}");
+        }
+    }
 
     /// `set_banner_pattern` (and `set_components`) hand a banner's layers over
     /// as a component; the renderer and the tooltip read `banner_patterns`, so

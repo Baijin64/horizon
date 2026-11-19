@@ -79,10 +79,12 @@ fn same_levels(a: &Levels, b: &Levels) -> bool {
         && b.iter().all(|entry| a.contains(entry))
 }
 
-/// A hash of `levels` that ignores their order, to agree with [`same_levels`].
+/// A hash of `levels` that ignores their order and repeats, so lists [`same_levels`] calls
+/// equal hash alike even when one repeats an entry.
 fn hash_levels<H: Hasher>(levels: &Levels, state: &mut H) {
     let mut sorted: Vec<_> = levels.iter().collect();
     sorted.sort_unstable();
+    sorted.dedup();
     sorted.hash(state);
 }
 pub mod trim;

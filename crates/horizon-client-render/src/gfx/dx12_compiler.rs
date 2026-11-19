@@ -7,7 +7,10 @@
 //! about 9 % of GPU time at render distance 32 and lost 0.03 ms at 8. So
 //! discrete GPUs keep FXC (`d3dcompiler_47.dll`, part of Windows), and only
 //! integrated ones load DXC (`dxcompiler.dll`, which the Windows x64 zip puts
-//! beside the game: `tools/ci/fetch_dxc.py`).
+//! beside the game: `tools/ci/fetch_dxc.py`). The exception is a discrete GPU
+//! asked for ray queries or mesh shaders: those need Shader Model 6.5, which
+//! FXC (Shader Model 5.1) can't compile, so it loads DXC too. Its ordinary
+//! play, without either, keeps FXC.
 //!
 //! wgpu chooses the compiler for a whole instance, before any adapter is
 //! known. `open_backend` therefore asks for the adapter on an FXC instance and,
@@ -23,12 +26,18 @@ use std::path::PathBuf;
 pub(super) const DLL: &str = "dxcompiler.dll";
 
 /// Whether `info`, opened on an FXC instance, should be opened again with DXC:
-/// an integrated GPU on DirectX 12, unless `forced` (`WGPU_DX12_COMPILER` is
-/// set, so its compiler is already the one every instance uses).
-pub(super) fn wants_dxc(info: &wgpu::AdapterInfo, forced: bool) -> bool {
+/// an integrated GPU on DirectX 12, or a discrete one when the device will be
+/// asked for Shader Model 6.5 features (`sm_6_5`: ray queries or mesh shaders),
+/// unless `forced` (`WGPU_DX12_COMPILER` is set, so its compiler is already the
+/// one every instance uses).
+pub(super) fn wants_dxc(info: &wgpu::AdapterInfo, forced: bool, sm_6_5: bool) -> bool {
     !forced
         && info.backend == wgpu::Backend::Dx12
-        && info.device_type == wgpu::DeviceType::IntegratedGpu
+        && match info.device_type {
+            wgpu::DeviceType::IntegratedGpu => true,
+            wgpu::DeviceType::DiscreteGpu => sm_6_5,
+            _ => false,
+        }
 }
 
 /// Whether `WGPU_DX12_COMPILER` names the compiler.
@@ -101,33 +110,42 @@ mod tests {
     }
 
     #[test]
-    fn only_integrated_gpus_on_directx_12_get_dxc() {
+    fn integrated_gpus_and_discrete_ones_asked_for_shader_model_6_5_get_dxc() {
         use wgpu::{Backend, DeviceType};
-        assert!(wants_dxc(
-            &adapter(Backend::Dx12, DeviceType::IntegratedGpu),
-            false
-        ));
-        for kind in [
-            DeviceType::DiscreteGpu,
-            DeviceType::VirtualGpu,
-            DeviceType::Cpu,
-            DeviceType::Other,
-        ] {
-            assert!(!wants_dxc(&adapter(Backend::Dx12, kind), false), "{kind:?}");
+        for sm_6_5 in [false, true] {
+            assert!(wants_dxc(
+                &adapter(Backend::Dx12, DeviceType::IntegratedGpu),
+                false,
+                sm_6_5
+            ));
+            for kind in [DeviceType::VirtualGpu, DeviceType::Cpu, DeviceType::Other] {
+                assert!(
+                    !wants_dxc(&adapter(Backend::Dx12, kind), false, sm_6_5),
+                    "{kind:?}"
+                );
+            }
+            // Other backends have no shader compiler to choose.
+            for backend in [Backend::Vulkan, Backend::Gl, Backend::Metal] {
+                for kind in [DeviceType::IntegratedGpu, DeviceType::DiscreteGpu] {
+                    assert!(
+                        !wants_dxc(&adapter(backend, kind), false, sm_6_5),
+                        "{backend:?} {kind:?}"
+                    );
+                }
+            }
         }
-        // Other backends have no shader compiler to choose.
-        for backend in [Backend::Vulkan, Backend::Gl, Backend::Metal] {
-            assert!(
-                !wants_dxc(&adapter(backend, DeviceType::IntegratedGpu), false),
-                "{backend:?}"
-            );
-        }
+        // A discrete GPU keeps FXC (#8513) unless ray queries or mesh shaders need DXC.
+        let dgpu = adapter(Backend::Dx12, DeviceType::DiscreteGpu);
+        assert!(!wants_dxc(&dgpu, false, false));
+        assert!(wants_dxc(&dgpu, false, true));
     }
 
     #[test]
     fn wgpu_dx12_compiler_overrides_the_choice() {
         let igpu = adapter(wgpu::Backend::Dx12, wgpu::DeviceType::IntegratedGpu);
-        assert!(!wants_dxc(&igpu, true));
+        assert!(!wants_dxc(&igpu, true, false));
+        let dgpu = adapter(wgpu::Backend::Dx12, wgpu::DeviceType::DiscreteGpu);
+        assert!(!wants_dxc(&dgpu, true, true));
     }
 
     #[test]

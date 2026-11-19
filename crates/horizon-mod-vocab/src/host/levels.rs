@@ -765,6 +765,12 @@ pub trait LevelsBackend {
     /// height. Constant time, no allocation.
     #[access(WorldOnly)]
     fn level_capability_generation(&self, level: LevelRef, pos: [i32; 3]) -> Option<u64>;
+    /// Side: both.
+    /// `BlockState.isRedstoneConductor(level, pos)` for the block at `pos`: whether it passes
+    /// strong power on to its neighbours (stone and soul sand do; glass, slabs and leaves
+    /// don't), the rule the game's redstone reads. None as for `block_state`.
+    #[access(WorldOnly)]
+    fn level_is_redstone_conductor(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
 }
 /// The handles' writes of the `levels` area, implemented by the game and reached through [`BackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait

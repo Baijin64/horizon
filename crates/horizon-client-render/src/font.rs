@@ -219,30 +219,36 @@ fn resource_path(id: &str, folder: &str, ext: &str) -> String {
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
     format!("assets/{ns}/{folder}/{}{ext}", path.trim_end_matches(ext))
 }
-/// Why vanilla refuses a bitmap provider while its font file decodes
-/// (`BitmapProvider.Definition`): `height` (8 when missing) and `ascent` not
-/// integers, `ascent` above `height`, or a `chars` grid that is empty or whose
-/// rows differ in length, counted in code points as `String.codePoints` does
-/// (a Rust `char` is one). Other providers pass.
-fn bitmap_error(p: &serde_json::Value) -> Option<String> {
-    use serde_json::Value;
-    if p["type"] != "bitmap" {
-        return None;
-    }
-    let file = p["file"].as_str().unwrap_or("");
-    let int = |v: &Value| {
+/// A bitmap provider's `height` (8 when missing or null) and `ascent`, as
+/// vanilla decodes them: any JSON number taken as an integer, a fraction
+/// truncated toward zero, saturated to the 32-bit range (vanilla wraps there).
+/// `None` when either isn't a number or `ascent` is missing.
+fn bitmap_height_ascent(p: &serde_json::Value) -> Option<(i32, i32)> {
+    let int = |v: &serde_json::Value| {
         v.as_i64()
-            .or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))
-            .and_then(|v| i32::try_from(v).ok())
+            .or_else(|| v.as_f64().map(|f| f as i64))
+            .map(|v| v.clamp(i32::MIN.into(), i32::MAX.into()) as i32)
     };
     let height = if p["height"].is_null() {
         Some(8)
     } else {
         int(&p["height"])
     };
-    let (Some(height), Some(ascent)) = (height, int(&p["ascent"])) else {
+    Some((height?, int(&p["ascent"])?))
+}
+/// Why vanilla refuses a bitmap provider while its font file decodes
+/// (`BitmapProvider.Definition`): `height` or `ascent` not a number (or no
+/// `ascent`), `ascent` above `height`, or a `chars` grid that is empty or whose
+/// rows differ in length, counted in code points as `String.codePoints` does
+/// (a Rust `char` is one). Other providers pass.
+fn bitmap_error(p: &serde_json::Value) -> Option<String> {
+    if p["type"] != "bitmap" {
+        return None;
+    }
+    let file = p["file"].as_str().unwrap_or("");
+    let Some((height, ascent)) = bitmap_height_ascent(p) else {
         return Some(format!(
-            "bitmap {file}: height and ascent have to be integers"
+            "bitmap {file}: height and ascent have to be numbers"
         ));
     };
     if ascent > height {
@@ -410,17 +416,27 @@ fn load_bitmap(
     };
     let cell_w = sw / width as u32;
     let cell_h = sh / rows.len() as u32;
-    // A grid with more rows or columns than the sheet has pixels: no cell to
-    // measure, and a zero cell height would scale by infinity.
+    // Checked with the whole file (`font_file_error`).
+    let (height, ascent) = bitmap_height_ascent(p).unwrap_or((8, 7));
+    let (height, ascent) = (height as f32, ascent as f32);
+    let top = 7.0 - ascent;
+    // A grid with more rows or columns than the sheet has pixels: each
+    // character is an empty glyph of advance 1, as vanilla's arithmetic ends
+    // there, and still kept from later providers.
     if cell_w == 0 || cell_h == 0 {
-        log::error!(
-            "font sheet {file}: {sw}x{sh} pixels can't hold {width}x{} cells; provider skipped",
-            rows.len()
-        );
+        for ch in rows.iter().flatten().filter(|c| **c != '\0') {
+            out.entry(*ch).or_insert(BitmapGlyph::Atlas(Glyph {
+                rect: None,
+                left: 0.0,
+                top,
+                right: 0.0,
+                bottom: top,
+                advance: 1.0,
+                offset: 1.0,
+            }));
+        }
         return out;
     }
-    let height = p["height"].as_f64().unwrap_or(8.0) as f32;
-    let ascent = p["ascent"].as_f64().unwrap_or(7.0) as f32;
     let scale = height / cell_h as f32;
     let origin = in_atlas.map_or((0, 0), |rect| {
         (
@@ -442,7 +458,6 @@ fn load_bitmap(
                     (origin.0 + x, origin.1 + y, cell_w, cell_h),
                 ),
             };
-            let top = 7.0 - ascent;
             let glyph = Glyph {
                 rect: None,
                 left: 0.0,
@@ -1918,7 +1933,7 @@ mod tests {
                 "ascent-above-height",
                 r#""height":8,"ascent":9,"chars":["af"]"#,
             ),
-            ("fractional-ascent", r#""ascent":7.5,"chars":["af"]"#),
+            ("text-ascent", r#""ascent":"7","chars":["af"]"#),
             ("no-ascent", r#""chars":["af"]"#),
             ("empty-row", r#""ascent":7,"chars":["","af"]"#),
         ] {
@@ -1936,11 +1951,23 @@ mod tests {
         }
     }
 
-    /// More rows or columns than the sheet has pixels leave cells of no size:
-    /// a zero height scaled the advance to NaN, a zero width drew an empty
-    /// glyph over the next provider's. The provider is refused.
+    /// Vanilla reads `height` and `ascent` as integers, a fraction truncated
+    /// toward zero: 8.9 and 6.5 load as 8 and 6.
     #[test]
-    fn a_grid_larger_than_its_sheet_is_skipped() {
+    fn fractional_height_and_ascent_are_truncated() {
+        let sheet = png(16, 16, |_, _| true);
+        let first = r#"{"type":"bitmap","file":"minecraft:font/first.png","height":8.9,"ascent":6.5,"chars":["af"]}"#;
+        let g = font_after("fractional", first, &sheet).glyph('f');
+        // Cells 8x16 at height 8: half scale; top 7 - 6.
+        assert_eq!((g.top, g.bottom), (1.0, 9.0));
+        assert_eq!(g.advance, 5.0, "8 columns used, at half scale, and one");
+    }
+
+    /// More rows or columns than the sheet has pixels leave cells of no size.
+    /// Vanilla keeps the provider: each character is an empty glyph of advance
+    /// 1, and a later provider's glyph for it isn't used.
+    #[test]
+    fn a_grid_larger_than_its_sheet_draws_empty_glyphs() {
         for (name, sheet, chars) in [
             ("too-many-rows", png(16, 1, |_, _| true), r#"["a","b"]"#),
             ("too-many-columns", png(4, 8, |_, _| true), r#"["abcde"]"#),
@@ -1948,12 +1975,10 @@ mod tests {
             let first = format!(
                 r#"{{"type":"bitmap","file":"minecraft:font/first.png","ascent":7,"chars":{chars}}}"#
             );
-            let font = font_after(name, &first, &sheet);
-            assert_eq!(
-                font.glyph('a').advance,
-                3.0,
-                "{name}: 'a' from the next provider"
-            );
+            let g = font_after(name, &first, &sheet).glyph('a');
+            assert_eq!(g.advance, 1.0, "{name}: not the next provider's 3");
+            assert!(g.rect.is_none(), "{name}: nothing drawn");
+            assert!(g.top.is_finite() && g.bottom.is_finite(), "{name}");
         }
     }
 

@@ -56,7 +56,7 @@ fn servers(mut s: Scrubber, home: &Path, log: &str) -> Scrubber {
             && host.contains(|c: char| c.is_ascii_alphabetic())
             && !official.contains(&host.to_ascii_lowercase())
         {
-            s = s.term(host);
+            s = s.host(host);
         }
     }
     s
@@ -135,9 +135,9 @@ mod tests {
         let official = host(server_list::OFFICIAL_ADDRESS).to_owned();
         let log = format!(
             "[12:00:00] [Server Connector #1/INFO]: Connecting to Play.Secret-Host.net, 25565\n\
-             [12:00:01] [Render thread/INFO]: Joining Play.Secret-Host.net as a 1.21 server\n\
+             [12:00:01] [Render thread/INFO]: Joining play.secret-host.net as a 1.21 server\n\
              [12:00:02] [Server Connector #2/INFO]: Connecting to {official}, 25565\n\
-             [12:01:00] [Render thread/INFO]: Left mc.friends-castle.org:25570 and typed.example.net\n\
+             [12:01:00] [Render thread/INFO]: Left MC.Friends-Castle.org:25570 and typed.example.net\n\
              [12:02:00] [Render thread/INFO]: Loaded minecraft textures for the server list"
         );
 

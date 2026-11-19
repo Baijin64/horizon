@@ -13,6 +13,8 @@ pub const PRIVATE: &str = "<private>";
 pub struct Scrubber {
     /// Exact terms to hide, longest first.
     terms: Vec<String>,
+    /// Host names to hide in any case, lowercase, longest first.
+    hosts: Vec<String>,
     user: Option<String>,
 }
 
@@ -24,6 +26,7 @@ impl Scrubber {
             .find_map(|k| std::env::var(k).ok().filter(|u| u.trim().len() >= 3));
         Self {
             terms: Vec::new(),
+            hosts: Vec::new(),
             user,
         }
     }
@@ -49,10 +52,24 @@ impl Scrubber {
         self
     }
 
+    /// Hides the host name `host` wherever it appears, in any case: `Play.Example.net` and
+    /// `play.example.net` are the same server. Like [`Self::term`], under 3 characters is ignored.
+    pub fn host(mut self, host: &str) -> Self {
+        let host = host.trim().to_ascii_lowercase();
+        if host.len() >= 3 && !self.hosts.contains(&host) {
+            self.hosts.push(host);
+            self.hosts.sort_by_key(|h| std::cmp::Reverse(h.len()));
+        }
+        self
+    }
+
     pub fn scrub(&self, text: &str) -> String {
         let mut out = text.to_owned();
         for term in &self.terms {
             out = out.replace(term.as_str(), PRIVATE);
+        }
+        for host in &self.hosts {
+            out = replace_any_case(&out, host);
         }
         out = user_folders(&out);
         out = replace_tokens(&out, email_at);
@@ -64,6 +81,21 @@ impl Scrubber {
         }
         out
     }
+}
+
+/// `text` with every ASCII-case-insensitive match of the lowercase `host` replaced by [`PRIVATE`].
+/// ASCII lowercasing keeps every byte where it was, so the matches' offsets hold in `text`.
+fn replace_any_case(text: &str, host: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, _) in lower.match_indices(host) {
+        out.push_str(&text[copied..at]);
+        out.push_str(PRIVATE);
+        copied = at + host.len();
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 /// `/Users/ana/…`, `/home/ana/…`, `C:\Users\Ana Silva\…` (also JSON-escaped): the folder after

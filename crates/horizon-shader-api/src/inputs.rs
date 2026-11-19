@@ -257,14 +257,14 @@ uniform! {
         full_lightmap: [f32; 3],
         @pad full_lightmap_padding: [u32; 1],
         /// This frame's sub-pixel offset of the world, added to clip `xy / w` (y up): the offset
-        /// `projection` leaves out. Rebuilding a point from the depth subtracts it first
-        /// (`clip.xy -= frame.jitter`, then `projection_inverse`); projecting a point to sample
-        /// what the world drew this frame adds it after `projection`. `(0, 0)` while the world
-        /// isn't jittered. Only a pack whose files name `jitter` or `previous_jitter` has this
+        /// `projection` leaves out. Rebuilding a point from the depth subtracts it before
+        /// `projection_inverse` (`vec4<f32>(ndc.xy - frame.jitter, depth, 1.0)`); projecting a
+        /// point to sample what the world drew this frame adds it to `xy / w` after `projection`.
+        /// `(0, 0)` while the world isn't jittered. Only a pack whose files name `jitter` or `previous_jitter` has this
         /// field.
         jitter: [f32; 2],
-        /// Last frame's `jitter`: reprojecting a `keep = "view"` resource adds it after
-        /// `previous_view_projection`. `(0, 0)` where `previous_view_projection` is this frame's
+        /// Last frame's `jitter`: reprojecting a `keep = "view"` resource adds it to `xy / w`
+        /// after `previous_view_projection`. `(0, 0)` where `previous_view_projection` is this frame's
         /// (the first frame, after a pause or a reset) and while the world isn't jittered. Only a
         /// pack whose files name `jitter` or `previous_jitter` has this field.
         previous_jitter: [f32; 2],

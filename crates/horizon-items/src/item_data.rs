@@ -71,31 +71,35 @@ use std::{
 /// them as a map, see [`same_levels`]).
 pub type Levels = Vec<(Arc<str>, u32)>;
 
-/// The levels gameplay reads from `levels`: the first entry of each id, as [`level_in`] finds
-/// it; a later entry repeating an id is never read.
-fn effective_levels(levels: &Levels) -> Vec<&(Arc<str>, u32)> {
-    let mut out: Vec<&(Arc<str>, u32)> = Vec::with_capacity(levels.len());
-    for entry in levels {
-        if !out.iter().any(|seen| seen.0 == entry.0) {
-            out.push(entry);
-        }
-    }
-    out
+/// Whether `levels` names an id twice (say, saved as both `minecraft:sharpness` and
+/// `sharpness`): the lookup reads the first entry, saving keeps the last.
+fn repeats_an_id(levels: &Levels) -> bool {
+    levels
+        .iter()
+        .enumerate()
+        .any(|(i, (id, _))| levels[..i].iter().any(|(seen, _)| seen == id))
 }
 
 /// `ItemEnchantments.equals`: vanilla keeps the levels in a map, so two lists with the same
-/// enchantments at the same levels are equal in any order. Compared as the map gameplay reads
-/// ([`effective_levels`]), so equal stacks always have the same levels in effect.
+/// enchantments at the same levels are equal in any order. A list repeating an id has no single
+/// map (the lookup and the saved form disagree), so it only equals the very same list.
 fn same_levels(a: &Levels, b: &Levels) -> bool {
-    let (a, b) = (effective_levels(a), effective_levels(b));
+    if repeats_an_id(a) || repeats_an_id(b) {
+        return a == b;
+    }
     a.len() == b.len() && a.iter().all(|entry| b.contains(entry))
 }
 
-/// A hash of the levels in effect, in no particular order, to agree with [`same_levels`].
+/// A hash agreeing with [`same_levels`]: in no particular order for a list of distinct ids,
+/// as the list is for one repeating an id.
 fn hash_levels<H: Hasher>(levels: &Levels, state: &mut H) {
-    let mut effective = effective_levels(levels);
-    effective.sort_unstable();
-    effective.hash(state);
+    if repeats_an_id(levels) {
+        levels.hash(state);
+        return;
+    }
+    let mut sorted: Vec<_> = levels.iter().collect();
+    sorted.sort_unstable();
+    sorted.hash(state);
 }
 pub mod trim;
 pub use trim::Trim;
@@ -2133,11 +2137,10 @@ mod tests {
     }
 
     /// A list may repeat an id (the vectors are public; two spellings of one id
-    /// decode to one key). The lookup reads the first entry, so stacks compare,
-    /// and hash, by those first levels: a repeat the lookup never reads makes no
-    /// difference, and swapping which level comes first does.
+    /// decode to one key). The lookup reads the first entry but the saved map
+    /// keeps the last, so such a list only equals the very same list, in order.
     #[test]
-    fn repeated_enchantment_ids_compare_by_the_first_level_the_lookup_reads() {
+    fn a_list_repeating_an_id_only_equals_the_same_list() {
         let hash = |stack: &ItemStack| {
             let mut state = std::collections::hash_map::DefaultHasher::new();
             stack.hash_item_and_components(&mut state);
@@ -2152,17 +2155,14 @@ mod tests {
         let one_five = sword(&[("minecraft:sharpness", 1), ("minecraft:sharpness", 5)]);
         let five_one = sword(&[("minecraft:sharpness", 5), ("minecraft:sharpness", 1)]);
         let one = sword(&[("minecraft:sharpness", 1)]);
-        assert_eq!(one_five.tag_enchantment_level("minecraft:sharpness"), 1);
-        assert_eq!(five_one.tag_enchantment_level("minecraft:sharpness"), 5);
         assert!(!one_five.same_item_same_components(&five_one));
-        assert!(one_five.same_item_same_components(&one));
-        assert_eq!(hash(&one_five), hash(&one));
-        // Distinct ids in another order, one of them repeated: still equal.
-        let a = sword(&[
-            ("minecraft:sharpness", 1),
-            ("minecraft:unbreaking", 3),
-            ("minecraft:sharpness", 5),
-        ]);
+        assert!(!one_five.same_item_same_components(&one));
+        assert!(!one.same_item_same_components(&one_five));
+        let again = sword(&[("minecraft:sharpness", 1), ("minecraft:sharpness", 5)]);
+        assert!(one_five.same_item_same_components(&again));
+        assert_eq!(hash(&one_five), hash(&again));
+        // Distinct ids in another order are still equal, and hash alike.
+        let a = sword(&[("minecraft:sharpness", 1), ("minecraft:unbreaking", 3)]);
         let b = sword(&[("minecraft:unbreaking", 3), ("minecraft:sharpness", 1)]);
         assert!(a.same_item_same_components(&b));
         assert_eq!(hash(&a), hash(&b));

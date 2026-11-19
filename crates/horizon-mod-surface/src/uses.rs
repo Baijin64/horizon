@@ -29,7 +29,8 @@
 //! Neither rule reaches a variant of an enum the mod defines, which builds no API struct: one
 //! written through the enum (`Kind::Settings { … }`, `crate::kinds::Kind::Settings { … }`, or
 //! `Self::Settings { … }` in an impl for it), when nothing can make the enum's name another
-//! item, or one imported by the only `use` of its name in a file the second rule could judge
+//! item (a path that starts at the enum's name, only in a file the second rule could judge,
+//! since a glob there may bring in another), or one imported by the only `use` of its name in a file the second rule could judge
 //! (`use crate::Kind::Settings;`, also `as` another name). Inside a macro body, whose tokens
 //! the parser does not read, such a literal still counts as the API struct's.
 //!
@@ -1505,7 +1506,9 @@ impl<'a, 's, 't> Resolver<'a, 's, 't> {
     /// `super` or a module the mod declares, nothing makes the enum's name another item (an
     /// API item or alias of one, an API root or binding, a module or alias of the mod's, a
     /// `use` from outside the mod), and the mod has no associated type of the variant's name.
-    fn own_variant(&self, path: &[&'t str], rooted: bool) -> bool {
+    /// A path that starts at the enum (`Kind::Settings`) counts only in a certain file
+    /// (`index`): a glob there may bring in another `Kind`.
+    fn own_variant(&self, index: usize, path: &[&'t str], rooted: bool) -> bool {
         let [inside @ .., owner, variant] = path else {
             return false;
         };
@@ -1515,6 +1518,7 @@ impl<'a, 's, 't> Resolver<'a, 's, 't> {
         };
         !rooted
             && module.variants.contains(&(*owner, *variant))
+            && (self.certain[index] || !inside.is_empty())
             && inside.iter().all(in_mod)
             && !module.others.contains(*variant)
             && api_names_of(owner, module, &self.index.by_name).is_empty()
@@ -1540,7 +1544,7 @@ impl<'a, 's, 't> Resolver<'a, 's, 't> {
             && !file.type_aliases.iter().any(|(alias, _, _)| *alias == name)
             && matches!(
                 (bindings.next(), bindings.next()),
-                (Some((path, _)), None) if self.own_variant(path, false)
+                (Some((path, _)), None) if self.own_variant(index, path, false)
             )
     }
 
@@ -1777,10 +1781,10 @@ impl<'s, 't> Walk<'_, '_, 's, 't> {
                         .flatten()
                         .is_some_and(|target| {
                             let path: Vec<&str> = target.iter().chain(rest).copied().collect();
-                            resolver.own_variant(&path, false)
+                            resolver.own_variant(index, &path, false)
                         }),
                     [name] if !build.rooted => resolver.imported_variant(index, name),
-                    path => resolver.own_variant(path, build.rooted),
+                    path => resolver.own_variant(index, path, build.rooted),
                 };
             if variant {
                 continue;

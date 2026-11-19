@@ -1605,6 +1605,8 @@ fn a_variant_of_the_mods_own_enum_builds_no_api_struct() {
         "fn g() { let s = crate::kind::Other::Settings { mine: 1 }; }",
         "use dep::Kind;\nfn g() { let s = Kind::Settings { mine: 1 }; }",
         "use mod_api::*;\nuse crate::kind::Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }",
+        "use mod_api::*;\nfn g() { let s = Kind::Settings { mine: 1 }; }",
+        "use crate::kind::Kind;\nuse mod_api::*;\nimpl Kind { fn new() -> Self { Self::Settings { mine: 1 } } }",
         "use crate::kind::Kind::Settings;\nfn g() { let s = Settings { mine: 1 }; }\nfn h() { use mod_api::Settings; let s = Settings { height: 1 }; }",
         "use crate::kind::Kind;\nfn g() { let v = vec![Kind::Settings { mine: 1 }]; }",
     ] {

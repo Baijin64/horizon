@@ -26,6 +26,13 @@
 //!   whose names nothing in the mod rebinds, in a mod with no `include!`. Otherwise it is every
 //!   API struct of that name.
 //!
+//! Neither rule reaches a variant of an enum the mod defines, which builds no API struct: one
+//! written through the enum (`Kind::Settings { … }`, `crate::kinds::Kind::Settings { … }`, or
+//! `Self::Settings { … }` in an impl for it), when nothing can make the enum's name another
+//! item, or one imported by the only `use` of its name in a file the second rule could judge
+//! (`use crate::Kind::Settings;`, also `as` another name). Inside a macro body, whose tokens
+//! the parser does not read, such a literal still counts as the API struct's.
+//!
 //! The parser does not expand macros, so what it cannot see is counted as doubt, never as
 //! fitting, because a refusal is safe and a wrong "fits" is not:
 //! - a macro body's tokens are read as they stand: an API struct name in one followed by `{` or
@@ -821,6 +828,8 @@ struct ModFacts<'t> {
     bound: BTreeMap<&'t str, BTreeSet<Vec<&'t str>>>,
     /// The structs, enums, unions and enum variants the mod defines.
     types: BTreeSet<&'t str>,
+    /// The enums the mod's files define, each with its variants: (enum, variant).
+    variants: BTreeSet<(&'t str, &'t str)>,
     /// The type aliases the mod defines as items of their own.
     item_aliases: BTreeSet<&'t str>,
     /// Every other name the mod defines: traits, associated types.
@@ -864,6 +873,7 @@ fn mod_facts<'t>(files: &[FileFacts<'t>], api_prefixes: &BTreeSet<String>) -> Mo
         aliases: BTreeMap::new(),
         bound: BTreeMap::new(),
         types: BTreeSet::new(),
+        variants: BTreeSet::new(),
         item_aliases: BTreeSet::new(),
         others: BTreeSet::new(),
         rebound: BTreeSet::new(),
@@ -917,6 +927,7 @@ fn mod_facts<'t>(files: &[FileFacts<'t>], api_prefixes: &BTreeSet<String>) -> Mo
             }
         }
         facts.types.extend(file.syntax.types.iter().copied());
+        facts.variants.extend(file.syntax.variants.iter().copied());
         facts.types.extend(file.macro_types.iter().copied());
         facts.others.extend(file.syntax.traits.iter().copied());
     }
@@ -1488,6 +1499,51 @@ impl<'a, 's, 't> Resolver<'a, 's, 't> {
             && !file.imported.contains(name)
     }
 
+    /// Whether `path` is a variant of an enum the mod defines, written through the enum
+    /// (`Kind::Settings`, `crate::kinds::Kind::Settings`): its literal builds no API struct.
+    /// Only when the path is not rooted, every segment before the enum is `crate`, `self`,
+    /// `super` or a module the mod declares, nothing makes the enum's name another item (an
+    /// API item or alias of one, an API root or binding, a module or alias of the mod's, a
+    /// `use` from outside the mod), and the mod has no associated type of the variant's name.
+    fn own_variant(&self, path: &[&'t str], rooted: bool) -> bool {
+        let [inside @ .., owner, variant] = path else {
+            return false;
+        };
+        let module = self.module;
+        let in_mod = |segment: &&str| {
+            matches!(*segment, "crate" | "self" | "super") || module.modules.contains(*segment)
+        };
+        !rooted
+            && module.variants.contains(&(*owner, *variant))
+            && inside.iter().all(in_mod)
+            && !module.others.contains(*variant)
+            && api_names_of(*owner, module, &self.index.by_name).is_empty()
+            && !module.roots.contains(*owner)
+            && !module.bound.contains_key(*owner)
+            && !module.modules.contains(*owner)
+            && !module.aliases.contains_key(*owner)
+            && self.files.iter().all(|file| {
+                file.imports
+                    .iter()
+                    .all(|(path, local)| local != owner || path.first().is_some_and(in_mod))
+            })
+    }
+
+    /// Whether an unqualified `name` in file `index` is a variant of the mod's own enum that
+    /// the file imports (`use crate::Kind::Settings;`, or `as` another name): the file is
+    /// certain, its one `use` that binds the name is such a variant ([`Self::own_variant`]),
+    /// and no `type` alias in it has the name.
+    fn imported_variant(&self, index: usize, name: &str) -> bool {
+        let file = &self.files[index];
+        let mut bindings = file.imports.iter().filter(|(_, local)| *local == name);
+        self.certain[index]
+            && !file.type_aliases.iter().any(|(alias, _, _)| *alias == name)
+            && matches!(
+                (bindings.next(), bindings.next()),
+                (Some((path, _)), None) if self.own_variant(path, false)
+            )
+    }
+
     /// Whether a name the scan cannot place may be an API struct by another name.
     fn unknown(&self, name: &str) -> bool {
         name.starts_with(|c: char| c.is_ascii_uppercase())
@@ -1712,6 +1768,23 @@ impl<'s, 't> Walk<'_, '_, 's, 't> {
                 [.., last] => (*last, build.path.len() == 1 && !build.rooted),
                 [] => continue,
             };
+            // A variant of the mod's own enum: through the enum, through `Self` in an impl
+            // for it, or imported by name.
+            let variant =
+                match &build.path[..] {
+                    ["Self", rest @ ..] => resolver
+                        .impl_at(index, build.byte)
+                        .flatten()
+                        .is_some_and(|target| {
+                            let path: Vec<&str> = target.iter().chain(rest).copied().collect();
+                            resolver.own_variant(&path, false)
+                        }),
+                    [name] if !build.rooted => resolver.imported_variant(index, name),
+                    path => resolver.own_variant(path, build.rooted),
+                };
+            if variant {
+                continue;
+            }
             resolver.lookup(name);
             let resolver: &Resolver<'_, 's, 't> = resolver;
             let resolved = &resolver.memo[name];

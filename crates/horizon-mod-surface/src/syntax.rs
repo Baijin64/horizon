@@ -54,6 +54,8 @@ pub(crate) struct Syntax<'t> {
     pub defines: BTreeSet<&'t str>,
     /// Every struct, enum and union defined anywhere, and every enum variant.
     pub types: BTreeSet<&'t str>,
+    /// Every enum defined anywhere with each of its variants: (enum, variant).
+    pub variants: BTreeSet<(&'t str, &'t str)>,
     /// Every trait defined anywhere.
     pub traits: BTreeSet<&'t str>,
     /// `type X = …Y<…>;` anywhere: (X, Y), and whether it is an item of its own (not an
@@ -212,8 +214,9 @@ impl<'a, 't> Visit<'a> for Reader<'t> {
         let name = self.name(&i.ident);
         self.out.types.insert(name);
         for variant in &i.variants {
-            let name = self.name(&variant.ident);
-            self.out.types.insert(name);
+            let variant = self.name(&variant.ident);
+            self.out.types.insert(variant);
+            self.out.variants.insert((name, variant));
         }
         visit::visit_item_enum(self, i);
     }

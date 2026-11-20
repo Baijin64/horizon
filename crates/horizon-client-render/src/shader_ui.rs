@@ -456,15 +456,10 @@ fn ray_note(s: &Settings, rays: Option<RayStatus>, sheets: &mut [Sheet<Tab, Item
         None | Some(RayStatus::Ready) => return,
         Some(RayStatus::Restart) => lang::tr(RAY_RESTART, &[&lang::get("options.needsRestart")]),
         Some(RayStatus::Unsupported) => lang::get(RAY_UNSUPPORTED),
-        Some(RayStatus::Off) => {
-            // The variable overrides the setting, so only Off with no variable is the setting's.
-            let env = std::env::var_os("HORIZON_RAY_TRACING").is_some();
-            if !env && s.horizon.ray_tracing == crate::graphics::RayTracingMode::Off {
-                lang::get(RAY_SETTING_OFF)
-            } else {
-                lang::get(RAY_OFF)
-            }
-        }
+        Some(RayStatus::Off) => lang::get(off_note(
+            s.horizon.ray_tracing,
+            std::env::var_os("HORIZON_RAY_TRACING").is_some(),
+        )),
     };
     let tag = matches!(rays, Some(RayStatus::Restart)).then(|| lang::get(RAY_RESTART_TAG));
     for sheet in sheets.iter_mut() {
@@ -478,6 +473,16 @@ fn ray_note(s: &Settings, rays: Option<RayStatus>, sheets: &mut [Sheet<Tab, Item
             row.warning = Some(note.clone());
             row.tag = tag.clone();
         }
+    }
+}
+
+/// Why ray tracing is off (`RayStatus::Off`), under the Ray Tracing `setting`: the variable
+/// overrides the setting while it is set (`overridden`), so only Off without it is the setting's.
+fn off_note(setting: crate::graphics::RayTracingMode, overridden: bool) -> &'static str {
+    if !overridden && setting == crate::graphics::RayTracingMode::Off {
+        RAY_SETTING_OFF
+    } else {
+        RAY_OFF
     }
 }
 
@@ -1226,4 +1231,18 @@ mod tests {
         assert_eq!(missed, Vec::<String>::new());
     }
     const VANILLA_KEYS: [&str; 3] = ["pack.openFolder", "options.generic_value", "options.off"];
+
+    /// Off is the setting's only when `HORIZON_RAY_TRACING` isn't set to override it.
+    #[test]
+    fn ray_tracing_is_off_by_the_setting_only_without_the_variable() {
+        use crate::graphics::RayTracingMode::{Auto, Off, On};
+        assert_eq!(off_note(Off, false), RAY_SETTING_OFF);
+        for (setting, overridden) in [(Off, true), (Auto, false), (Auto, true), (On, true)] {
+            assert_eq!(
+                off_note(setting, overridden),
+                RAY_OFF,
+                "{setting:?} {overridden}"
+            );
+        }
+    }
 }

@@ -1,5 +1,6 @@
 //! Which compiler turns DirectX 12's shaders into bytecode: DXC on integrated
-//! GPUs, FXC on every other adapter (#8513).
+//! GPUs and on a discrete GPU asked for ray queries or mesh shaders, FXC
+//! otherwise (#8513).
 //!
 //! Measured on one laptop at render distance 32 (2560x1440, the same world and
 //! view): DXC took Intel Iris Xe from 44 to 65 FPS (22.1 to 14.7 ms of GPU
@@ -14,8 +15,8 @@
 //!
 //! wgpu chooses the compiler for a whole instance, before any adapter is
 //! known. `open_backend` therefore asks for the adapter on an FXC instance and,
-//! when that adapter is an integrated GPU on DirectX 12, asks again on an
-//! instance with DXC. That happens once, when the device is opened; nothing
+//! when that adapter is an integrated GPU on DirectX 12 or a discrete one asked
+//! for Shader Model 6.5 (`wants_dxc`), asks again on an instance with DXC. That happens once, when the device is opened; nothing
 //! here runs per frame. Without the DLL, or when it does not load, the game
 //! keeps the FXC instance and logs one line. `WGPU_DX12_COMPILER` (`fxc`,
 //! `dxc`, `auto`) overrides the choice: wgpu applies it to every instance.

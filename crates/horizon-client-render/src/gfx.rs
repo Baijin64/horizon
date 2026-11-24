@@ -7011,11 +7011,20 @@ impl Renderer {
         }
         self.ray_tracing_mode = mode;
         let traces = self.executor.is_some_and(|c| c.ray_scene);
+        let had = self.ray_scene.is_some();
         rt::scene::follow(
             &mut self.ray_scene,
             &self.device,
             rt::query::wanted(rt::query::switch_with(mode), traces),
         );
+        // The pack's trace groups hold the dropped scene's buffers: they go with it, so a later
+        // scene, whose generations start over, never draws with them.
+        if had
+            && self.ray_scene.is_none()
+            && let Some(native) = &mut self.external
+        {
+            native.bind_scene(&self.device, None, glam::DVec3::ZERO);
+        }
     }
     /// Measures which pixels of each block sprite may shine (`hdr_stats`), at the current
     /// masks. Only with HDR output on: nothing else reads them.

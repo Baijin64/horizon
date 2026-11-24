@@ -728,6 +728,7 @@
   "No shader packs yet: open the pack folder and put some in it.": "No shader packs yet: open the pack folder and put some in it.",
   "Pick a shader pack. Picking the one in use turns shaders off.": "Pick a shader pack. Picking the one in use turns shaders off.",
   "Ray tracing: %s Until then the pack draws without it.": "Ray tracing: %s Until then the pack draws without it.",
+  "Ray tracing: %s This start's DirectX 12 shader compiler has none; the next start picks one that has. Until then the pack draws without it.": "Ray tracing: %s This start's DirectX 12 shader compiler has none; the next start picks one that has. Until then the pack draws without it.",
   "This GPU or graphics API has no ray tracing: the pack draws without it.": "This GPU or graphics API has no ray tracing: the pack draws without it.",
   "Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1.": "Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1.",
   "Restart needed": "Restart needed",

@@ -67,6 +67,7 @@ const APPLYING: &str = "Applying shader pack...";
 const NOTE_LINES: usize = 3;
 /// Why a picked pack that declares `[ray_tracing]` draws without it.
 const RAY_RESTART: &str = "Ray tracing: %s Until then the pack draws without it.";
+const RAY_COMPILER: &str = "Ray tracing: %s This start's DirectX 12 shader compiler has none; the next start picks one that has. Until then the pack draws without it.";
 const RAY_UNSUPPORTED: &str =
     "This GPU or graphics API has no ray tracing: the pack draws without it.";
 const RAY_OFF: &str = "Ray tracing is off: HORIZON_RAY_TRACING is set to something other than 1.";
@@ -457,13 +458,15 @@ fn ray_note(s: &Settings, rays: Option<RayStatus>, sheets: &mut [Sheet<Tab, Item
     let note = match rays {
         None | Some(RayStatus::Ready) => return,
         Some(RayStatus::Restart) => lang::tr(RAY_RESTART, &[&lang::get("options.needsRestart")]),
+        Some(RayStatus::Compiler) => lang::tr(RAY_COMPILER, &[&lang::get("options.needsRestart")]),
         Some(RayStatus::Unsupported) => lang::get(RAY_UNSUPPORTED),
         Some(RayStatus::Off) => lang::get(off_note(
             s.horizon.ray_tracing,
             std::env::var_os("HORIZON_RAY_TRACING").is_some(),
         )),
     };
-    let tag = matches!(rays, Some(RayStatus::Restart)).then(|| lang::get(RAY_RESTART_TAG));
+    let tag = matches!(rays, Some(RayStatus::Restart | RayStatus::Compiler))
+        .then(|| lang::get(RAY_RESTART_TAG));
     for sheet in sheets.iter_mut() {
         if matches!(sheet.id, Tab::Packs | Tab::Screen(0)) {
             // A line of its own above the description: a long description must not push the
@@ -1448,6 +1451,7 @@ mod tests {
                 "Apply",
                 "Undo",
                 "Search options",
+                RAY_COMPILER,
                 RAY_OFF,
                 RAY_SETTING_OFF,
             ] {

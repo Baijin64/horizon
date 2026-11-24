@@ -224,12 +224,20 @@ pub(super) fn experimental(features: wgpu::Features) -> wgpu::ExperimentalFeatur
 }
 
 /// What ray tracing is on a renderer to a pack that declares `[ray_tracing]`: `offered`, its
-/// adapter has ray queries; `enabled`, its device was opened with them.
-fn status(switch: Switch, offered: bool, enabled: bool) -> crate::gfx::output::RayStatus {
+/// adapter has ray queries; `enabled`, its device was opened with them; `until_asked`, its
+/// adapter is on a compiler without them only because the start didn't ask for them
+/// (`dx12_compiler::fxc_until_asked`).
+fn status(
+    switch: Switch,
+    offered: bool,
+    enabled: bool,
+    until_asked: bool,
+) -> crate::gfx::output::RayStatus {
     use crate::gfx::output::RayStatus;
     match (switch, offered, enabled) {
         (Switch::Off, ..) => RayStatus::Off,
         (_, _, true) => RayStatus::Ready,
+        (_, false, _) if until_asked => RayStatus::Compiler,
         (_, false, _) => RayStatus::Unsupported,
         (_, true, false) => RayStatus::Restart,
     }
@@ -246,6 +254,7 @@ impl crate::gfx::Renderer {
                 switch_with(self.ray_tracing_mode),
                 offered,
                 on(&self.device),
+                crate::gfx::dx12_compiler::fxc_until_asked(),
             )),
             ..output
         }
@@ -260,7 +269,7 @@ mod tests {
     /// pack; any other value forces it off.
     #[test]
     fn the_pack_turns_ray_tracing_on_unless_the_variable_says_otherwise() {
-        use crate::gfx::output::RayStatus::{Off, Ready, Restart, Unsupported};
+        use crate::gfx::output::RayStatus::{Compiler, Off, Ready, Restart, Unsupported};
         let os = |v: &str| Some(std::ffi::OsString::from(v));
         let cases = [
             (None, Switch::Pack),
@@ -277,11 +286,14 @@ mod tests {
         assert!(wanted(Switch::Pack, true) && !wanted(Switch::Pack, false));
         assert!(wanted(Switch::On, false) && !wanted(Switch::Off, true));
         // (switch, offered, enabled) -> what the shader pack screen says
-        assert_eq!(status(Switch::Pack, true, true), Ready);
-        assert_eq!(status(Switch::Pack, true, false), Restart);
-        assert_eq!(status(Switch::Pack, false, false), Unsupported);
-        assert_eq!(status(Switch::On, false, false), Unsupported);
-        assert_eq!(status(Switch::Off, true, false), Off);
+        assert_eq!(status(Switch::Pack, true, true, false), Ready);
+        assert_eq!(status(Switch::Pack, true, false, false), Restart);
+        assert_eq!(status(Switch::Pack, false, false, false), Unsupported);
+        assert_eq!(status(Switch::On, false, false, false), Unsupported);
+        assert_eq!(status(Switch::Off, true, false, false), Off);
+        // A start on DirectX 12's FXC that didn't ask: the next one, asked, compiles with DXC.
+        assert_eq!(status(Switch::On, false, false, true), Compiler);
+        assert_eq!(status(Switch::Off, false, false, true), Off);
     }
 
     #[test]
